@@ -349,7 +349,7 @@ where C::Target: chain::Filter,
 	/// always need to fetch full blocks absent another means for determining which blocks contain
 	/// transactions relevant to the watched channels.
 	pub fn new(chain_source: Option<C>, broadcaster: T, logger: L, feeest: F, persister: P) -> Self {
-		println!("ChainMonitor NEW"); // Adam
+		println!("Adam ChainMonitor NEW"); // Adam
 		Self {
 			monitors: RwLock::new(HashMap::new()),
 			sync_persistence_id: AtomicCounter::new(),
