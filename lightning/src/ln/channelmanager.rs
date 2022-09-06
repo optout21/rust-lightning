@@ -2261,6 +2261,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 							if fake_scid::is_valid_phantom(&self.fake_scid_rand_bytes, *short_channel_id) {
 								None
 							} else {
+								println!("Don't have available channel for forwarding as requested."); // Adam
 								break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
 							}
 						},
