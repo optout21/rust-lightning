@@ -71,6 +71,7 @@ use core::ops::Deref;
 
 #[cfg(any(test, feature = "std"))]
 use std::time::Instant;
+use std::{thread, time};
 use util::crypto::sign;
 
 // We hold various information about HTLC relay in the HTLC objects in Channel itself:
@@ -2263,6 +2264,13 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 							} else {
 								println!("Adam Don't have available channel for forwarding as requested."); // Adam
 								println!("{}", short_channel_id);
+								println!("Going to sleep");
+
+								let sleep_period = time::Duration::from_millis(2000);
+								thread::sleep(sleep_period);
+
+								println!("Sleep done");
+
 								break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
 							}
 						},
