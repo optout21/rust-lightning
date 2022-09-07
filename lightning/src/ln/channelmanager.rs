@@ -51,7 +51,7 @@ use ln::onion_utils;
 use ln::msgs::{ChannelMessageHandler, DecodeError, LightningError, MAX_VALUE_MSAT};
 use ln::wire::Encode;
 use chain::keysinterface::{Sign, KeysInterface, KeysManager, InMemorySigner, Recipient};
-use util::config::{UserConfig, ChannelConfig};
+use util::config::{UserConfig, ChannelConfig, ChannelHandshakeConfig, ChannelHandshakeLimits};
 use util::events::{EventHandler, EventsProvider, MessageSendEvent, MessageSendEventsProvider, ClosureReason, HTLCDestination};
 use util::{byte_utils, events};
 use util::scid_utils::fake_scid;
@@ -73,6 +73,7 @@ use core::ops::Deref;
 use std::time::Instant;
 use std::{thread, time};
 use util::crypto::sign;
+use std::net::{ToSocketAddrs};
 
 // We hold various information about HTLC relay in the HTLC objects in Channel itself:
 //
@@ -2145,6 +2146,77 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 		})
 	}
 
+	// Adam
+	fn to_vec(hex: &str) -> Option<Vec<u8>> {
+		let mut out = Vec::with_capacity(hex.len() / 2);
+
+		let mut b = 0;
+		for (idx, c) in hex.as_bytes().iter().enumerate() {
+			b <<= 4;
+			match *c {
+				b'A'..=b'F' => b |= c - b'A' + 10,
+				b'a'..=b'f' => b |= c - b'a' + 10,
+				b'0'..=b'9' => b |= c - b'0',
+				_ => return None,
+			}
+			if (idx & 1) == 1 {
+				out.push(b);
+				b = 0;
+			}
+		}
+
+		Some(out)
+	}
+
+	// Adam
+	fn to_compressed_pubkey(hex: &str) -> Option<PublicKey> {
+		if hex.len() != 33 * 2 {
+			return None;
+		}
+		let data = match Self::to_vec(&hex[0..33 * 2]) {
+			Some(bytes) => bytes,
+			None => return None,
+		};
+		match PublicKey::from_slice(&data) {
+			Ok(pk) => Some(pk),
+			Err(_) => None,
+		}
+	}
+
+	// Adam
+	fn open_channel(&self, 
+		peer_pubkey: PublicKey, channel_amt_sat: u64, announced_channel: bool
+		//channel_manager: Arc<ChannelManager<Signer, M, T, K, F, L>>,
+	) -> Result<(), ()> {
+		let config = UserConfig {
+			channel_handshake_limits: ChannelHandshakeLimits {
+				// use zeroconf
+				trust_own_funding_0conf: true,
+				// lnd's max to_self_delay is 2016, so we want to be compatible.
+				their_to_self_delay: 2016,
+				..Default::default()
+			},
+			channel_handshake_config: ChannelHandshakeConfig {
+				// wait for 1 confirmation only instead of default 6
+				minimum_depth: 1,
+				announced_channel,
+				..Default::default()
+			},
+			..Default::default()
+		};
+
+		match Self::create_channel(&self, peer_pubkey, channel_amt_sat, 0, 0, Some(config)) {
+			Ok(_) => {
+				println!("EVENT: initiated channel with peer {}. ", peer_pubkey);
+				return Ok(());
+			}
+			Err(e) => {
+				println!("ERROR: failed to open channel: {:?}", e);
+				return Err(());
+			}
+		}
+	}
+
 	fn decode_update_add_htlc_onion(&self, msg: &msgs::UpdateAddHTLC) -> (PendingHTLCStatus, MutexGuard<ChannelHolder<Signer>>) {
 		macro_rules! return_malformed_err {
 			($msg: expr, $err_code: expr) => {
@@ -2262,16 +2334,51 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 							if fake_scid::is_valid_phantom(&self.fake_scid_rand_bytes, *short_channel_id) {
 								None
 							} else {
-								println!("Adam Don't have available channel for forwarding as requested."); // Adam
-								println!("{}", short_channel_id);
-								println!("Going to sleep");
+								println!("Adam Don't have available channel for forwarding as requested.");
+								println!("short_channel_id {} {:#x}", short_channel_id, short_channel_id);
 
+								// open channel to WNode
+								// hardcoded peer
+								let peer_pubkey = "030245e125869603614f619ea3fc8921144de191fe9348c1aafc69fc87a8384e9f";
+								let peer_addr_str = "127.0.0.1:9745";
+								let channel_value_sat = 37000;
+
+								let pubkey = Self::to_compressed_pubkey(peer_pubkey);
+
+								let peer_addr = peer_addr_str.to_socket_addrs().map(|mut r| r.next());
+								if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
+									break Some(("Invalid peer address.", 0x4000 | 10, None));
+								}
+
+								/*
+								if connect_peer_if_necessary(pubkey, peer_addr, peer_manager.clone())
+									.await
+									.is_err()
+								{
+									continue;
+								};
+								*/
+
+								match Self::open_channel(
+									self,
+									pubkey.unwrap(),
+									channel_value_sat,
+									false // private
+									//channel_manager.clone(),
+								) {
+									Ok(_) => {}
+									Err(_e) => {
+										break Some(("Could not open channel", 0x4000 | 10, None));
+									}
+								};
+
+								println!("Going to sleep for a while ...");
 								let sleep_period = time::Duration::from_millis(2000);
 								thread::sleep(sleep_period);
-
-								println!("Sleep done");
+								println!("... sleep done");
 
 								break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
+								//continue;
 							}
 						},
 						Some((_cp_id, chan_id)) => Some(chan_id.clone()),
