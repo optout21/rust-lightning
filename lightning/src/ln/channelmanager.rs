@@ -1429,6 +1429,8 @@ macro_rules! maybe_break_monitor_err {
 
 macro_rules! send_channel_ready {
 	($short_to_chan_info: expr, $pending_msg_events: expr, $channel: expr, $channel_ready_msg: expr) => {
+		println!("send_channel_ready");
+		println!("short_to_chan_info size {}", $short_to_chan_info.len());
 		$pending_msg_events.push(events::MessageSendEvent::SendChannelReady {
 			node_id: $channel.get_counterparty_node_id(),
 			msg: $channel_ready_msg,
@@ -1443,6 +1445,7 @@ macro_rules! send_channel_ready {
 			assert!(scid_insert.is_none() || scid_insert.unwrap() == ($channel.get_counterparty_node_id(), $channel.channel_id()),
 				"SCIDs should never collide - ensure you weren't behind the chain tip by a full month when creating channels");
 		}
+		println!("short_to_chan_info size {}", $short_to_chan_info.len());
 	}
 }
 
@@ -2292,6 +2295,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 			// with a short_channel_id of 0. This is important as various things later assume
 			// short_channel_id is non-0 in any ::Forward.
 			if let &PendingHTLCRouting::Forward { ref short_channel_id, .. } = routing {
+				println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
 				let id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&short_channel_id).cloned();
 				if let Some((err, code, chan_update)) = loop {
 					let forwarding_id_opt = match id_option {
@@ -2325,6 +2329,8 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 									continue;
 								};
 								*/
+
+								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
 
 								println!("About to open channel to {} with {}", pubkey.unwrap(), channel_value_sat);
 
@@ -2438,6 +2444,8 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 									hash_map::Entry::Vacant(entry) => { entry.insert(channel); }
 								}
 
+								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
+
 								println!("about to push msg");
 								//channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
 								//locked_channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
@@ -2452,13 +2460,18 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 								// end of copy of open_channel()
 								//});
 
+								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
+
 								println!("Going to sleep for a while ...");
-								let sleep_period = time::Duration::from_millis(2000);
+								let sleep_period = time::Duration::from_millis(6000);
 								thread::sleep(sleep_period);
 								println!("... sleep done");
 
-								break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
+								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
+
+								//break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
 								//continue;
+								break None
 							}
 						},
 						Some((_cp_id, chan_id)) => Some(chan_id.clone()),
@@ -2527,8 +2540,18 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 					}
 
 					break None;
-				}
+				} // loop
+
 				{
+					println!("loop over");
+
+					println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
+
+					println!("Going to sleep for a while ...");
+					let sleep_period = time::Duration::from_millis(3000);
+					thread::sleep(sleep_period);
+					println!("... sleep done");
+
 					let mut res = VecWriter(Vec::with_capacity(chan_update.serialized_length() + 2 + 8 + 2));
 					if let Some(chan_update) = chan_update {
 						if code == 0x1000 | 11 || code == 0x1000 | 12 {
