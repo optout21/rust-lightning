@@ -2424,25 +2424,24 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 
 								let temporary_channel_id = channel.channel_id();
 								println!("temporary_channel_id");
-								println!("about to lock ...");
-								let mut channel_state = self.channel_state.lock().unwrap();
-								println!("... locked");
-								match channel_state.by_id.entry(temporary_channel_id) {
+
+								//println!("about to lock ...");
+								//let mut channel_state = self.channel_state.lock().unwrap();
+								//println!("... locked");
+
+								//match channel_state.by_id.entry(temporary_channel_id) {
 								//match locked_channel_state.by_id.entry(temporary_channel_id) {
+								match channel_state.as_mut().unwrap().by_id.entry(temporary_channel_id) {
 									hash_map::Entry::Occupied(_) => {
-										if cfg!(fuzzing) {
-											//return Err(APIError::APIMisuseError { err: "Fuzzy bad RNG".to_owned() });
-											//return Err(());
-											break Some(("Could not open channel Fuzz", 0x4000 | 10, None));
-										} else {
-											panic!("RNG is bad???");
-										}
+										break Some(("Could not open channel Occupied", 0x4000 | 10, None));
 									},
 									hash_map::Entry::Vacant(entry) => { entry.insert(channel); }
 								}
-								println!("about to push");
-								channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
+
+								println!("about to push msg");
+								//channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
 								//locked_channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
+								channel_state.as_mut().unwrap().pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
 									node_id: peer_pubkey,
 									msg: res,
 								});
