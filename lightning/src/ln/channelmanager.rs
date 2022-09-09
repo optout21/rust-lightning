@@ -1453,6 +1453,7 @@ macro_rules! handle_chan_restoration_locked {
 	($self: ident, $channel_lock: expr, $channel_state: expr, $channel_entry: expr,
 	 $raa: expr, $commitment_update: expr, $order: expr, $chanmon_update: expr,
 	 $pending_forwards: expr, $funding_broadcastable: expr, $channel_ready: expr, $announcement_sigs: expr) => { {
+		println!("Adam handle_chan_restoration_locked");
 		let mut htlc_forwards = None;
 
 		let chanmon_update: Option<ChannelMonitorUpdate> = $chanmon_update; // Force type-checking to resolve
@@ -2277,8 +2278,8 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 					},
 				};
 
-				println!("Decoded onion data  scid {}", short_channel_id);
-				println!("    pubkey {} {:#x}", new_pubkey, new_pubkey);
+				println!("Decoded onion data  scid {} {:#x}", short_channel_id, short_channel_id);
+				println!("    pubkey {:#x}", new_pubkey);
 				println!("    paymenthash {:?}", msg.payment_hash);
 
 				PendingHTLCStatus::Forward(PendingHTLCInfo {
@@ -2314,11 +2315,23 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 								println!("Adam Don't have available channel for forwarding as requested.");
 								println!("short_channel_id {} {:#x}", short_channel_id, short_channel_id);
 
-								// open channel to WNode
 								// hardcoded values
 								let peer_pubkey = "030245e125869603614f619ea3fc8921144de191fe9348c1aafc69fc87a8384e9f";
 								let peer_addr_str = "127.0.0.1:9745";
 								let channel_value_sat = 33000;
+
+								// Try to look for a channel to target pubkey
+								let mut target_scid: u64 = 0;
+								for (key, value) in &channel_state.as_ref().unwrap().short_to_chan_info {
+									let valstr = format!("{:?}", value);
+									println!("{} / {:?} {}", key, value, valstr);
+									if valstr == "030" {
+										target_scid = *key;
+									}
+								}
+								println!("target_scid {}", target_scid);
+
+								// open channel to WNode
 
 								let pubkey = Self::to_compressed_pubkey(peer_pubkey);
 
@@ -4822,7 +4835,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 	}
 
 	fn internal_funding_created(&self, counterparty_node_id: &PublicKey, msg: &msgs::FundingCreated) -> Result<(), MsgHandleErrInternal> {
-		println!("internal_funding_created");
+		println!("Adam internal_funding_created");
 		let ((funding_msg, monitor, mut channel_ready), mut chan) = {
 			let best_block = *self.best_block.read().unwrap();
 			let mut channel_lock = self.channel_state.lock().unwrap();
@@ -4895,6 +4908,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 	}
 
 	fn internal_funding_signed(&self, counterparty_node_id: &PublicKey, msg: &msgs::FundingSigned) -> Result<(), MsgHandleErrInternal> {
+		println!("Adam internal_funding_signed");
 		let funding_tx = {
 			let best_block = *self.best_block.read().unwrap();
 			let mut channel_lock = self.channel_state.lock().unwrap();
@@ -6107,6 +6121,7 @@ where
 						}, HTLCDestination::NextHopChannel { node_id: Some(channel.get_counterparty_node_id()), channel_id: channel.channel_id() }));
 					}
 					if let Some(channel_ready) = channel_ready_opt {
+						println!("Adam do_chain_event send_channel_ready");
 						send_channel_ready!(short_to_chan_info, pending_msg_events, channel, channel_ready);
 						if channel.is_usable() {
 							log_trace!(self.logger, "Sending channel_ready with private initial channel_update for our counterparty on channel {}", log_bytes!(channel.channel_id()));
