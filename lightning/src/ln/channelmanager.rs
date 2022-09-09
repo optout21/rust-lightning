@@ -2303,7 +2303,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 			if let &PendingHTLCRouting::Forward { ref short_channel_id, .. } = routing {
 				println!("Adam Forwarding info, amount {}  routing scid {}", amt_to_forward, short_channel_id);
 				println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
-				let id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&short_channel_id).cloned();
+				let mut id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&short_channel_id).cloned();
 				if let Some((err, code, chan_update)) = loop {
 					let forwarding_id_opt = match id_option {
 						None => { // unknown_next_peer
@@ -2323,13 +2323,19 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 								// Try to look for a channel to target pubkey
 								let mut target_scid: u64 = 0;
 								for (key, value) in &channel_state.as_ref().unwrap().short_to_chan_info {
-									let valstr = format!("{:?}", value);
-									println!("{} / {:?} {}", key, value, valstr);
-									if valstr == "030" {
+									let chan_idstr = format!("{:?}", value);
+									let chan_idstr75 = chan_idstr[..75].to_string();
+									println!(" - {} / {} {}", key, chan_idstr, chan_idstr75);
+									if chan_idstr == "(PublicKey(9f4e38a887fc69fcaac14893fe91e14d142189fca39e614f6103968625e14502" {
 										target_scid = *key;
 									}
 								}
 								println!("target_scid {}", target_scid);
+								if target_scid != 0 {
+									// change destination next hop
+									id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&target_scid).cloned();
+									continue
+								}
 
 								// open channel to WNode
 
