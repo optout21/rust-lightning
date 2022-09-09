@@ -2188,6 +2188,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 
 
 	fn decode_update_add_htlc_onion(&self, msg: &msgs::UpdateAddHTLC) -> (PendingHTLCStatus, MutexGuard<ChannelHolder<Signer>>) {
+		println!("Adam decode_update_add_htlc_onion");
 		macro_rules! return_malformed_err {
 			($msg: expr, $err_code: expr) => {
 				{
@@ -2276,6 +2277,10 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 					},
 				};
 
+				println!("Decoded onion data  scid {}", short_channel_id);
+				println!("    pubkey {} {:#x}", new_pubkey, new_pubkey);
+				println!("    paymenthash {:?}", msg.payment_hash);
+
 				PendingHTLCStatus::Forward(PendingHTLCInfo {
 					routing: PendingHTLCRouting::Forward {
 						onion_packet: outgoing_packet,
@@ -2295,6 +2300,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 			// with a short_channel_id of 0. This is important as various things later assume
 			// short_channel_id is non-0 in any ::Forward.
 			if let &PendingHTLCRouting::Forward { ref short_channel_id, .. } = routing {
+				println!("Adam Forwarding info, amount {}  routing scid {}", amt_to_forward, short_channel_id);
 				println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
 				let id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&short_channel_id).cloned();
 				if let Some((err, code, chan_update)) = loop {
@@ -2309,10 +2315,10 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 								println!("short_channel_id {} {:#x}", short_channel_id, short_channel_id);
 
 								// open channel to WNode
-								// hardcoded peer
+								// hardcoded values
 								let peer_pubkey = "030245e125869603614f619ea3fc8921144de191fe9348c1aafc69fc87a8384e9f";
 								let peer_addr_str = "127.0.0.1:9745";
-								let channel_value_sat = 37000;
+								let channel_value_sat = 33000;
 
 								let pubkey = Self::to_compressed_pubkey(peer_pubkey);
 
@@ -4816,6 +4822,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 	}
 
 	fn internal_funding_created(&self, counterparty_node_id: &PublicKey, msg: &msgs::FundingCreated) -> Result<(), MsgHandleErrInternal> {
+		println!("internal_funding_created");
 		let ((funding_msg, monitor, mut channel_ready), mut chan) = {
 			let best_block = *self.best_block.read().unwrap();
 			let mut channel_lock = self.channel_state.lock().unwrap();
@@ -4927,6 +4934,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 	}
 
 	fn internal_channel_ready(&self, counterparty_node_id: &PublicKey, msg: &msgs::ChannelReady) -> Result<(), MsgHandleErrInternal> {
+		println!("Adam internal_channel_ready");
 		let mut channel_state_lock = self.channel_state.lock().unwrap();
 		let channel_state = &mut *channel_state_lock;
 		match channel_state.by_id.entry(msg.channel_id) {
@@ -5070,6 +5078,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 		//encrypted with the same key. It's not immediately obvious how to usefully exploit that,
 		//but we should prevent it anyway.
 
+		println!("Adam internal_update_add_htlc");
 		let (pending_forward_info, mut channel_state_lock) = self.decode_update_add_htlc_onion(msg);
 		let channel_state = &mut *channel_state_lock;
 
