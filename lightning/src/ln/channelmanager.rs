@@ -2303,7 +2303,7 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 			if let &PendingHTLCRouting::Forward { ref short_channel_id, .. } = routing {
 				println!("Adam Forwarding info, amount {}  routing scid {}", amt_to_forward, short_channel_id);
 				println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
-				let mut id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&short_channel_id).cloned();
+				let id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&short_channel_id).cloned();
 				if let Some((err, code, chan_update)) = loop {
 					let forwarding_id_opt = match id_option {
 						None => { // unknown_next_peer
@@ -2322,181 +2322,185 @@ impl<Signer: Sign, M: Deref, T: Deref, K: Deref, F: Deref, L: Deref> ChannelMana
 
 								// Try to look for a channel to target pubkey
 								let mut target_scid: u64 = 0;
+								let mut target_channel: Option<[u8; 32]> = None;
 								for (key, value) in &channel_state.as_ref().unwrap().short_to_chan_info {
 									let chan_idstr = format!("{:?}", value);
 									let chan_idstr75 = chan_idstr[..75].to_string();
 									println!(" - {} / {} {}", key, chan_idstr, chan_idstr75);
-									if chan_idstr == "(PublicKey(9f4e38a887fc69fcaac14893fe91e14d142189fca39e614f6103968625e14502" {
+									if chan_idstr75 == "(PublicKey(9f4e38a887fc69fcaac14893fe91e14d142189fca39e614f6103968625e14502" {
+										println!("found!");
 										target_scid = *key;
+										target_channel = match *value {
+											(_cp_id, chan_id) => Some(chan_id.clone())
+										};
 									}
-								}
-								println!("target_scid {}", target_scid);
-								if target_scid != 0 {
-									// change destination next hop
-									id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&target_scid).cloned();
-									continue
-								}
+								} // for
+								println!("target_scid {} target_channel {:#?}", target_scid, target_channel);
+								if target_scid == 0 {
+									// open channel to WNode
+									let pubkey = Self::to_compressed_pubkey(peer_pubkey);
 
-								// open channel to WNode
-
-								let pubkey = Self::to_compressed_pubkey(peer_pubkey);
-
-								let peer_addr = peer_addr_str.to_socket_addrs().map(|mut r| r.next());
-								if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
-									break Some(("Invalid peer address.", 0x4000 | 10, None));
-								}
-
-								/*
-								if connect_peer_if_necessary(pubkey, peer_addr, peer_manager.clone())
-									.await
-									.is_err()
-								{
-									continue;
-								};
-								*/
-
-								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
-
-								println!("About to open channel to {} with {}", pubkey.unwrap(), channel_value_sat);
-
-								/*
-								match Self::open_channel(
-									self,
-									pubkey.unwrap(),
-									channel_value_sat,
-									false // private
-									//channel_manager.clone(),
-								) {
-									Ok(_) => {}
-									Err(e) => {
-										println!("Could NOT open channel {:?}", e);
-										//break Some(("Could not open channel", 0x4000 | 10, None));
+									let peer_addr = peer_addr_str.to_socket_addrs().map(|mut r| r.next());
+									if peer_addr.is_err() || peer_addr.as_ref().unwrap().is_none() {
+										break Some(("Invalid peer address.", 0x4000 | 10, None));
 									}
-								};
-								*/
 
-								// Copied from open_channel()
-								//fn open_channel(&self,
-								//	peer_pubkey: PublicKey, channel_amt_sat: u64, announced_channel: bool
-								//	//channel_manager: Arc<ChannelManager<Signer, M, T, K, F, L>>,
-								//) -> Result<(), ()> {
-								let peer_pubkey = pubkey.unwrap();
-								let channel_amt_sat = channel_value_sat;
-								let announced_channel = false; // private
-								let config = UserConfig {
-									channel_handshake_limits: ChannelHandshakeLimits {
-										// use zeroconf
-										trust_own_funding_0conf: true,
-										// lnd's max to_self_delay is 2016, so we want to be compatible.
-										their_to_self_delay: 2016,
-										..Default::default()
-									},
-									channel_handshake_config: ChannelHandshakeConfig {
-										// wait for 1 confirmation only instead of default 6
-										minimum_depth: 1,
-										announced_channel,
-										..Default::default()
-									},
-									..Default::default()
-								};
+									/*
+									if connect_peer_if_necessary(pubkey, peer_addr, peer_manager.clone())
+										.await
+										.is_err()
+									{
+										continue;
+									};
+									*/
 
-								/*
-								match Self::create_channel(&self, peer_pubkey, channel_amt_sat, 0, 0, Some(config)
-								// &self, their_network_key: PublicKey, channel_value_satoshis: u64, push_msat: u64, user_channel_id: u64, override_config: Option<UserConfig>
-									//locked_channel_state
-								) {
-									Ok(_) => {
-										println!("EVENT: initiated channel with peer {}. ", peer_pubkey);
-										return Ok(());
-									}
-									Err(e) => {
-										println!("ERROR: failed to open channel: {:?}", e);
-										return Err(());
-									}
-								}*/
+									println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
 
-								// Copied from create_channel()
-								let push_msat = 0;
-								let user_channel_id = 0;
-								let override_config = Some(config);
+									println!("About to open channel to {} with {}", pubkey.unwrap(), channel_value_sat);
 
-								let channel = {
-									let per_peer_state = self.per_peer_state.read().unwrap();
-									match per_peer_state.get(&peer_pubkey) {
-										Some(peer_state) => {
-											let outbound_scid_alias = self.create_and_insert_outbound_scid_alias();
-											let peer_state = peer_state.lock().unwrap();
-											let their_features = &peer_state.latest_features;
-											let config = if override_config.is_some() { override_config.as_ref().unwrap() } else { &self.default_configuration };
-											match Channel::new_outbound(&self.fee_estimator, &self.keys_manager, peer_pubkey,
-												their_features, channel_amt_sat, push_msat, user_channel_id, config,
-												self.best_block.read().unwrap().height(), outbound_scid_alias)
-											{
-												Ok(res) => res,
-												Err(_e) => {
-													self.outbound_scid_aliases.lock().unwrap().remove(&outbound_scid_alias);
-													//return Err(());
-													break Some(("Could not open channel", 0x4000 | 10, None));
-												},
-											}
+									/*
+									match Self::open_channel(
+										self,
+										pubkey.unwrap(),
+										channel_value_sat,
+										false // private
+										//channel_manager.clone(),
+									) {
+										Ok(_) => {}
+										Err(e) => {
+											println!("Could NOT open channel {:?}", e);
+											//break Some(("Could not open channel", 0x4000 | 10, None));
+										}
+									};
+									*/
+
+									// Copied from open_channel()
+									//fn open_channel(&self,
+									//	peer_pubkey: PublicKey, channel_amt_sat: u64, announced_channel: bool
+									//	//channel_manager: Arc<ChannelManager<Signer, M, T, K, F, L>>,
+									//) -> Result<(), ()> {
+									let peer_pubkey = pubkey.unwrap();
+									let channel_amt_sat = channel_value_sat;
+									let announced_channel = false; // private
+									let config = UserConfig {
+										channel_handshake_limits: ChannelHandshakeLimits {
+											// use zeroconf
+											trust_own_funding_0conf: true,
+											// lnd's max to_self_delay is 2016, so we want to be compatible.
+											their_to_self_delay: 2016,
+											..Default::default()
 										},
-										//None => return Err(APIError::ChannelUnavailable { err: format!("Not connected to node: {}", peer_pubkey) }),
-										//None => return Err(()),
-										None => { break Some(("Could not open channel", 0x4000 | 10, None)); }
+										channel_handshake_config: ChannelHandshakeConfig {
+											// wait for 1 confirmation only instead of default 6
+											minimum_depth: 1,
+											announced_channel,
+											..Default::default()
+										},
+										..Default::default()
+									};
+
+									/*
+									match Self::create_channel(&self, peer_pubkey, channel_amt_sat, 0, 0, Some(config)
+									// &self, their_network_key: PublicKey, channel_value_satoshis: u64, push_msat: u64, user_channel_id: u64, override_config: Option<UserConfig>
+										//locked_channel_state
+									) {
+										Ok(_) => {
+											println!("EVENT: initiated channel with peer {}. ", peer_pubkey);
+											return Ok(());
+										}
+										Err(e) => {
+											println!("ERROR: failed to open channel: {:?}", e);
+											return Err(());
+										}
+									}*/
+
+									// Copied from create_channel()
+									let push_msat = 0;
+									let user_channel_id = 0;
+									let override_config = Some(config);
+
+									let channel = {
+										let per_peer_state = self.per_peer_state.read().unwrap();
+										match per_peer_state.get(&peer_pubkey) {
+											Some(peer_state) => {
+												let outbound_scid_alias = self.create_and_insert_outbound_scid_alias();
+												let peer_state = peer_state.lock().unwrap();
+												let their_features = &peer_state.latest_features;
+												let config = if override_config.is_some() { override_config.as_ref().unwrap() } else { &self.default_configuration };
+												match Channel::new_outbound(&self.fee_estimator, &self.keys_manager, peer_pubkey,
+													their_features, channel_amt_sat, push_msat, user_channel_id, config,
+													self.best_block.read().unwrap().height(), outbound_scid_alias)
+												{
+													Ok(res) => res,
+													Err(_e) => {
+														self.outbound_scid_aliases.lock().unwrap().remove(&outbound_scid_alias);
+														//return Err(());
+														break Some(("Could not open channel", 0x4000 | 10, None));
+													},
+												}
+											},
+											//None => return Err(APIError::ChannelUnavailable { err: format!("Not connected to node: {}", peer_pubkey) }),
+											//None => return Err(()),
+											None => { break Some(("Could not open channel", 0x4000 | 10, None)); }
+										}
+									};
+									println!("channel");
+									let res = channel.get_open_channel(self.genesis_hash.clone());
+									println!("res");
+
+									let _persistence_guard = PersistenceNotifierGuard::notify_on_drop(&self.total_consistency_lock, &self.persistence_notifier);
+									// We want to make sure the lock is actually acquired by PersistenceNotifierGuard.
+									debug_assert!(&self.total_consistency_lock.try_write().is_err());
+
+									let temporary_channel_id = channel.channel_id();
+									println!("temporary_channel_id");
+
+									//println!("about to lock ...");
+									//let mut channel_state = self.channel_state.lock().unwrap();
+									//println!("... locked");
+
+									//match channel_state.by_id.entry(temporary_channel_id) {
+									//match locked_channel_state.by_id.entry(temporary_channel_id) {
+									match channel_state.as_mut().unwrap().by_id.entry(temporary_channel_id) {
+										hash_map::Entry::Occupied(_) => {
+											break Some(("Could not open channel Occupied", 0x4000 | 10, None));
+										},
+										hash_map::Entry::Vacant(entry) => { entry.insert(channel); }
 									}
-								};
-								println!("channel");
-								let res = channel.get_open_channel(self.genesis_hash.clone());
-								println!("res");
 
-								let _persistence_guard = PersistenceNotifierGuard::notify_on_drop(&self.total_consistency_lock, &self.persistence_notifier);
-								// We want to make sure the lock is actually acquired by PersistenceNotifierGuard.
-								debug_assert!(&self.total_consistency_lock.try_write().is_err());
+									println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
 
-								let temporary_channel_id = channel.channel_id();
-								println!("temporary_channel_id");
+									println!("about to push msg");
+									//channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
+									//locked_channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
+									channel_state.as_mut().unwrap().pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
+										node_id: peer_pubkey,
+										msg: res,
+									});
+									println!("pushed");
+									//Ok(temporary_channel_id)
+									// End of copy of create_channel() ...
+									//return Ok(())
+									// end of copy of open_channel()
+									//});
 
-								//println!("about to lock ...");
-								//let mut channel_state = self.channel_state.lock().unwrap();
-								//println!("... locked");
+									println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
 
-								//match channel_state.by_id.entry(temporary_channel_id) {
-								//match locked_channel_state.by_id.entry(temporary_channel_id) {
-								match channel_state.as_mut().unwrap().by_id.entry(temporary_channel_id) {
-									hash_map::Entry::Occupied(_) => {
-										break Some(("Could not open channel Occupied", 0x4000 | 10, None));
-									},
-									hash_map::Entry::Vacant(entry) => { entry.insert(channel); }
+									println!("Going to sleep for a while ...");
+									let sleep_period = time::Duration::from_millis(6000);
+									thread::sleep(sleep_period);
+									println!("... sleep done");
+
+									println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
+
+									//break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
+									//continue;
+									break None
 								}
-
-								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
-
-								println!("about to push msg");
-								//channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
-								//locked_channel_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
-								channel_state.as_mut().unwrap().pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
-									node_id: peer_pubkey,
-									msg: res,
-								});
-								println!("pushed");
-								//Ok(temporary_channel_id)
-								// End of copy of create_channel() ...
-								//return Ok(())
-								// end of copy of open_channel()
-								//});
-
-								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
-
-								println!("Going to sleep for a while ...");
-								let sleep_period = time::Duration::from_millis(6000);
-								thread::sleep(sleep_period);
-								println!("... sleep done");
-
-								println!("short_to_chan_info size {}", channel_state.as_ref().unwrap().short_to_chan_info.len());
-
-								//break Some(("Don't have available channel for forwarding as requested.", 0x4000 | 10, None));
-								//continue;
-								break None
+								// change destination next hop
+								//id_option = channel_state.as_ref().unwrap().short_to_chan_info.get(&target_scid).cloned();
+								//continue
+								Some(target_channel.unwrap())
 							}
 						},
 						Some((_cp_id, chan_id)) => Some(chan_id.clone()),
