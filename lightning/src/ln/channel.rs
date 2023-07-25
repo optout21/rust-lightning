@@ -693,6 +693,7 @@ pub(super) struct ChannelContext<Signer: ChannelSigner> {
 	user_id: u128,
 
 	channel_id: ChannelId,
+	// TODO: merge with channel_id
 	temporary_channel_id: Option<ChannelId>, // Will be `None` for channels created prior to 0.0.115.
 	channel_state: u32,
 
@@ -5640,7 +5641,7 @@ impl<Signer: WriteableEcdsaChannelSigner> OutboundV1Channel<Signer> {
 			Err(_) => return Err(APIError::ChannelUnavailable { err: "Failed to get destination script".to_owned()}),
 		};
 
-		let temporary_channel_id = ChannelId::new_default(entropy_source.get_secure_random_bytes());
+		let temporary_channel_id = ChannelId::new_temporary(entropy_source.get_secure_random_bytes());
 
 		Ok(Self {
 			context: ChannelContext {
