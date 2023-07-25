@@ -608,12 +608,19 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 /// This is not exported to bindings users as we just use [u8; 32] directly
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ChannelId {
+	/// TODO doc
 	FundingTxBased([u8; 32]),
+	/// TODO doc
+	Temporary([u8; 32]),
 }
 
 impl ChannelId {
 	pub fn new_funding_tx_based(data: [u8; 32]) -> Self {
 		Self::FundingTxBased(data)
+	}
+
+	pub fn new_temporary(data: [u8; 32]) -> Self {
+		Self::Temporary(data)
 	}
 
 	pub fn new_default(data: [u8; 32]) -> Self {
@@ -627,6 +634,7 @@ impl ChannelId {
 	pub fn bytes(&self) -> &[u8; 32] {
 		match self {
 			Self::FundingTxBased(d) => d,
+			Self::Temporary(d) => d,
 		}
 	}
 
