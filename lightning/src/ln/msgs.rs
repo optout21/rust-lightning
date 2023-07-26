@@ -2795,7 +2795,7 @@ mod tests {
 		let (_, pubkey_6) = get_keys_from!("0606060606060606060606060606060606060606060606060606060606060606", secp_ctx);
 		let open_channel = msgs::OpenChannel {
 			chain_hash: BlockHash::from_hex("6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000").unwrap(),
-			temporary_channel_id: ChannelId::new_default([2; 32]),
+			temporary_channel_id: ChannelId::new_temporary([2; 32]),
 			funding_satoshis: 1311768467284833366,
 			push_msat: 2536655962884945560,
 			dust_limit_satoshis: 3608586615801332854,
@@ -2856,7 +2856,7 @@ mod tests {
 		let (_, pubkey_7) = get_keys_from!("0707070707070707070707070707070707070707070707070707070707070707", secp_ctx);
 		let open_channelv2 = msgs::OpenChannelV2 {
 			chain_hash: BlockHash::from_hex("6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000").unwrap(),
-			temporary_channel_id: ChannelId::new_default([2; 32]),
+			temporary_channel_id: ChannelId::new_temporary([2; 32]),
 			funding_feerate_sat_per_1000_weight: 821716,
 			commitment_feerate_sat_per_1000_weight: 821716,
 			funding_satoshis: 1311768467284833366,
@@ -2946,7 +2946,7 @@ mod tests {
 		let (_, pubkey_5) = get_keys_from!("0505050505050505050505050505050505050505050505050505050505050505", secp_ctx);
 		let (_, pubkey_6) = get_keys_from!("0606060606060606060606060606060606060606060606060606060606060606", secp_ctx);
 		let accept_channel = msgs::AcceptChannel {
-			temporary_channel_id: ChannelId::new_default([2; 32]),
+			temporary_channel_id: ChannelId::new_temporary([2; 32]),
 			dust_limit_satoshis: 1311768467284833366,
 			max_htlc_value_in_flight_msat: 2536655962884945560,
 			channel_reserve_satoshis: 3608586615801332854,
@@ -2989,7 +2989,7 @@ mod tests {
 		let (_, pubkey_6) = get_keys_from!("0606060606060606060606060606060606060606060606060606060606060606", secp_ctx);
 		let (_, pubkey_7) = get_keys_from!("0707070707070707070707070707070707070707070707070707070707070707", secp_ctx);
 		let accept_channelv2 = msgs::AcceptChannelV2 {
-			temporary_channel_id: ChannelId::new_default([2; 32]),
+			temporary_channel_id: ChannelId::new_temporary([2; 32]),
 			funding_satoshis: 1311768467284833366,
 			dust_limit_satoshis: 1311768467284833366,
 			max_htlc_value_in_flight_msat: 2536655962884945560,
@@ -3043,7 +3043,7 @@ mod tests {
 		let (privkey_1, _) = get_keys_from!("0101010101010101010101010101010101010101010101010101010101010101", secp_ctx);
 		let sig_1 = get_sig_on!(privkey_1, secp_ctx, String::from("01010101010101010101010101010101"));
 		let funding_created = msgs::FundingCreated {
-			temporary_channel_id: ChannelId::new_default([2; 32]),
+			temporary_channel_id: ChannelId::new_temporary([2; 32]),
 			funding_txid: Txid::from_hex("c2d4449afa8d26140898dd54d3390b057ba2a5afcf03ba29d7dc0d8b9ffe966e").unwrap(),
 			funding_output_index: 255,
 			signature: sig_1,

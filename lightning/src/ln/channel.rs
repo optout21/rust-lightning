@@ -650,6 +650,8 @@ impl Writeable for ChannelId {
 }
 
 impl Readable for ChannelId {
+	// TODO how is type preserved during serialization ???
+	// TODO add serialize-deserialize unit test
 	fn read<R: io::Read>(r: &mut R) -> Result<Self, DecodeError> {
 		let buf: [u8; 32] = Readable::read(r)?;
 		Ok(ChannelId::new_default(buf))
@@ -692,9 +694,11 @@ pub(super) struct ChannelContext<Signer: ChannelSigner> {
 
 	user_id: u128,
 
+	/// The current channel ID. Can be of any variant (temporary, funding TX based, ...).
 	channel_id: ChannelId,
-	// TODO: merge with channel_id
-	temporary_channel_id: Option<ChannelId>, // Will be `None` for channels created prior to 0.0.115.
+	/// The temporary channel ID used during channel setup. Value kept even after transitioning to a final channel ID. Of variant ChannelId::Temporary.
+	/// Will be `None` for channels created prior to 0.0.115.
+	temporary_channel_id: Option<ChannelId>,
 	channel_state: u32,
 
 	// When we reach max(6 blocks, minimum_depth), we need to send an AnnouncementSigs message to

@@ -9879,11 +9879,11 @@ mod tests {
 				check_added_monitors!(nodes[0], 1);
 				expect_channel_pending_event(&nodes[0], &nodes[1].node.get_our_node_id());
 			}
-			open_channel_msg.temporary_channel_id = ChannelId::new_default(nodes[0].keys_manager.get_secure_random_bytes());
+			open_channel_msg.temporary_channel_id = ChannelId::new_temporary(nodes[0].keys_manager.get_secure_random_bytes());
 		}
 
 		// A MAX_UNFUNDED_CHANS_PER_PEER + 1 channel will be summarily rejected
-		open_channel_msg.temporary_channel_id = ChannelId::new_default(nodes[0].keys_manager.get_secure_random_bytes());
+		open_channel_msg.temporary_channel_id = ChannelId::new_temporary(nodes[0].keys_manager.get_secure_random_bytes());
 		nodes[1].node.handle_open_channel(&nodes[0].node.get_our_node_id(), &open_channel_msg);
 		assert_eq!(get_err_msg(&nodes[1], &nodes[0].node.get_our_node_id()).channel_id,
 			open_channel_msg.temporary_channel_id);
@@ -9934,7 +9934,7 @@ mod tests {
 		for i in 0..super::MAX_UNFUNDED_CHANNEL_PEERS - 1 {
 			nodes[1].node.handle_open_channel(&peer_pks[i], &open_channel_msg);
 			get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannel, peer_pks[i]);
-			open_channel_msg.temporary_channel_id = ChannelId::new_default(nodes[0].keys_manager.get_secure_random_bytes());
+			open_channel_msg.temporary_channel_id = ChannelId::new_temporary(nodes[0].keys_manager.get_secure_random_bytes());
 		}
 		nodes[1].node.handle_open_channel(&last_random_pk, &open_channel_msg);
 		assert_eq!(get_err_msg(&nodes[1], &last_random_pk).channel_id,
@@ -9974,7 +9974,7 @@ mod tests {
 		for _ in 0..super::MAX_UNFUNDED_CHANS_PER_PEER {
 			nodes[1].node.handle_open_channel(&nodes[0].node.get_our_node_id(), &open_channel_msg);
 			get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannel, nodes[0].node.get_our_node_id());
-			open_channel_msg.temporary_channel_id = ChannelId::new_default(nodes[0].keys_manager.get_secure_random_bytes());
+			open_channel_msg.temporary_channel_id = ChannelId::new_temporary(nodes[0].keys_manager.get_secure_random_bytes());
 		}
 
 		// Once we have MAX_UNFUNDED_CHANS_PER_PEER unfunded channels, new inbound channels will be
@@ -10026,7 +10026,7 @@ mod tests {
 				_ => panic!("Unexpected event"),
 			}
 			get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannel, random_pk);
-			open_channel_msg.temporary_channel_id = ChannelId::new_default(nodes[0].keys_manager.get_secure_random_bytes());
+			open_channel_msg.temporary_channel_id = ChannelId::new_temporary(nodes[0].keys_manager.get_secure_random_bytes());
 		}
 
 		// If we try to accept a channel from another peer non-0conf it will fail.
@@ -10242,7 +10242,7 @@ mod tests {
 
 		// If we provide a channel_id not associated with the peer, we should get an error and no updates
 		// should be applied to ensure update atomicity as specified in the API docs.
-		let bad_channel_id = ChannelId::new_default([10; 32]);
+		let bad_channel_id = ChannelId::new_funding_tx_based([10; 32]);
 		let current_fee = nodes[0].node.list_channels()[0].config.unwrap().forwarding_fee_proportional_millionths;
 		let new_fee = current_fee + 100;
 		assert!(

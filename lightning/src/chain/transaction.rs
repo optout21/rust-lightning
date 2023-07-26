@@ -63,7 +63,7 @@ impl OutPoint {
 		res[..].copy_from_slice(&self.txid[..]);
 		res[30] ^= ((self.index >> 8) & 0xff) as u8;
 		res[31] ^= ((self.index >> 0) & 0xff) as u8;
-		ChannelId::new_default(res)
+		ChannelId::new_funding_tx_based(res)
 	}
 
 	/// Converts this OutPoint into the OutPoint field as used by rust-bitcoin
