@@ -67,6 +67,9 @@ mod monitor_tests;
 #[allow(unused_mut)]
 mod shutdown_tests;
 
+// Re-export ChannelId
+pub use self::channel::ChannelId;
+
 pub use self::peer_channel_encryptor::LN_MAX_MSG_LEN;
 
 /// payment_hash type, use to cross-lock hop
