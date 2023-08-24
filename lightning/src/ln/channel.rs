@@ -7504,7 +7504,7 @@ mod tests {
 	use crate::ln::PaymentHash;
 	use crate::ln::channelmanager::{self, HTLCSource, PaymentId};
 	use crate::ln::channel::InitFeatures;
-	use crate::ln::channel::{Channel, ChannelId, InboundHTLCOutput, OutboundV1Channel, InboundV1Channel, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator, commit_tx_fee_msat};
+	use crate::ln::channel::{Channel, InboundHTLCOutput, OutboundV1Channel, InboundV1Channel, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator, commit_tx_fee_msat};
 	use crate::ln::channel::{MAX_FUNDING_SATOSHIS_NO_WUMBO, TOTAL_BITCOIN_SUPPLY_SATOSHIS, MIN_THEIR_CHAN_RESERVE_SATOSHIS};
 	use crate::ln::features::ChannelTypeFeatures;
 	use crate::ln::msgs::{ChannelUpdate, DecodeError, UnsignedChannelUpdate, MAX_VALUE_MSAT};
@@ -7518,7 +7518,6 @@ mod tests {
 	use crate::routing::router::Path;
 	use crate::util::config::UserConfig;
 	use crate::util::errors::APIError;
-	use crate::util::ser::{Readable, Writeable};
 	use crate::util::test_utils;
 	use crate::util::test_utils::{OnGetShutdownScriptpubkey, TestKeysInterface};
 	use bitcoin::secp256k1::{Secp256k1, ecdsa::Signature};
@@ -7529,9 +7528,7 @@ mod tests {
 	use bitcoin::hash_types::WPubkeyHash;
 	use bitcoin::PackedLockTime;
 	use bitcoin::util::address::WitnessVersion;
-	use bitcoin::hashes::hex::ToHex;
 	use crate::prelude::*;
-	use crate::io;
 
 	struct TestFeeEstimator {
 		fee_est: u32
@@ -7540,47 +7537,6 @@ mod tests {
 		fn get_est_sat_per_1000_weight(&self, _: ConfirmationTarget) -> u32 {
 			self.fee_est
 		}
-	}
-
-	#[test]
-	fn test_channel_id_new_from_data() {
-		let data: [u8; 32] = [2; 32];
-		let channel_id = ChannelId::from_bytes(data.clone());
-		assert_eq!(*channel_id.bytes(), data);
-	}
-
-	#[test]
-	fn test_channel_id_from_funding_tx2() {
-		let channel_id = ChannelId::v1_from_funding_txid(&[2; 32], 1);
-		assert_eq!(channel_id.to_hex(), "0202020202020202020202020202020202020202020202020202020202020203");
-	}
-
-	#[test]
-	fn test_channel_id_equals() {
-		let channel_id11 = ChannelId::v1_from_funding_txid(&[2; 32], 2);
-		let channel_id12 = ChannelId::v1_from_funding_txid(&[2; 32], 2);
-		let channel_id21 = ChannelId::v1_from_funding_txid(&[2; 32], 42);
-		assert_eq!(channel_id11, channel_id12);
-		assert_ne!(channel_id11, channel_id21);
-	}
-
-	#[test]
-	fn test_channel_id_write_read() {
-		let data: [u8; 32] = [2; 32];
-		let channel_id = ChannelId::from_bytes(data.clone());
-
-		let mut w = test_utils::TestVecWriter(Vec::new());
-		channel_id.write(&mut w).unwrap();
-
-		let channel_id_2 = ChannelId::read(&mut io::Cursor::new(&w.0)).unwrap();
-		assert_eq!(channel_id_2, channel_id);
-		assert_eq!(channel_id_2.bytes(), &data);
-	}
-
-	#[test]
-	fn test_channel_id_display() {
-		let channel_id = ChannelId::from_bytes([42; 32]);
-		assert_eq!(format!("{}", &channel_id), "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a");
 	}
 
 	#[test]
