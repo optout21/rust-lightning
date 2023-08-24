@@ -22,7 +22,7 @@ use bitcoin::secp256k1::{PublicKey,SecretKey};
 use bitcoin::secp256k1::{Secp256k1,ecdsa::Signature};
 use bitcoin::secp256k1;
 
-use crate::ln::{PaymentPreimage, PaymentHash};
+use crate::ln::{ChannelId, PaymentPreimage, PaymentHash};
 use crate::ln::features::{ChannelTypeFeatures, InitFeatures};
 use crate::ln::msgs;
 use crate::ln::msgs::DecodeError;
@@ -601,78 +601,6 @@ struct PendingChannelMonitorUpdate {
 impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
-
-/// A unique 32-byte identifier for a channel.
-/// Depending on how the ID is generated, several varieties are distinguished (but all are stored as 32 bytes):
-/// - v1: generated based on funding tx outpoint (txid&index)
-/// - temporary: generated randomly
-/// (later planned v2: based on revocation point)
-/// The variety (context) is not stored, it is relevant only at creation.
-/// This is not exported to bindings users as we just use [u8; 32] directly
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ChannelId {
-	// The 32-byte data of the ID
-	data: [u8; 32],
-}
-
-impl ChannelId {
-	/// Create v1 channel ID based on a funding TX ID and output index
-	pub fn v1_from_funding_txid(txid: &[u8; 32], output_index: u16) -> Self {
-		let mut res = [0; 32];
-		res[..].copy_from_slice(&txid[..]);
-		res[30] ^= ((output_index >> 8) & 0xff) as u8;
-		res[31] ^= ((output_index >> 0) & 0xff) as u8;
-		Self::from_bytes(res)
-	}
-
-	/// Create a temporary channel ID randomly, based on an entropy source.
-	pub fn temporary_from_entropy_source<ES: Deref>(entropy_source: &ES) -> Self
-	where ES::Target: EntropySource {
-		Self::from_bytes(entropy_source.get_secure_random_bytes())
-	}
-
-	/// Generic constructor; create a new channel ID from the provided data.
-	/// Use a more specific *from_* constructor when possible.
-	/// This constructor is useful for tests, and internally, e.g. when the channel ID is being deserialized.
-	pub fn from_bytes(data: [u8; 32]) -> Self {
-		Self{data}
-	}
-
-	/// Create a channel ID consisting of all-zeros data (placeholder).
-	pub fn new_zero() -> Self {
-		Self::from_bytes([0; 32])
-	}
-
-	/// Accessor for the channel ID data
-	pub fn bytes(&self) -> &[u8; 32] {
-		&self.data
-	}
-}
-
-impl Writeable for ChannelId {
-	fn write<W: Writer>(&self, w: &mut W) -> Result<(), io::Error> {
-		self.data.write(w)
-	}
-}
-
-impl Readable for ChannelId {
-	fn read<R: io::Read>(r: &mut R) -> Result<Self, DecodeError> {
-		let buf: [u8; 32] = Readable::read(r)?;
-		Ok(ChannelId::from_bytes(buf))
-	}
-}
-
-impl ToHex for ChannelId {
-	fn to_hex(&self) -> String {
-		self.data.to_hex()
-	}
-}
-
-impl fmt::Display for ChannelId {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		crate::util::logger::DebugBytes(&self.data).fmt(f)
-	}
-}
 
 /// Contains all state common to unfunded inbound/outbound channels.
 pub(super) struct UnfundedChannelContext {

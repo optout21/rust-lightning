@@ -13,7 +13,7 @@ use bitcoin::hash_types::BlockHash;
 
 use lightning::blinded_path::{BlindedHop, BlindedPath};
 use lightning::chain::transaction::OutPoint;
-use lightning::ln::channel::ChannelId;
+use lightning::ln::ChannelId;
 use lightning::ln::channelmanager::{self, ChannelDetails, ChannelCounterparty};
 use lightning::ln::features::{BlindedHopFeatures, Bolt12InvoiceFeatures};
 use lightning::ln::msgs;

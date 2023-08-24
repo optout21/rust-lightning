@@ -31,7 +31,7 @@ use bitcoin::{secp256k1, Witness};
 use bitcoin::blockdata::script::Script;
 use bitcoin::hash_types::{Txid, BlockHash};
 
-use crate::ln::channel::ChannelId;
+use crate::ln::{ChannelId, PaymentPreimage, PaymentHash, PaymentSecret};
 use crate::ln::features::{ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
 use crate::ln::onion_utils;
 use crate::onion_message;
@@ -45,8 +45,6 @@ use crate::io_extras::read_to_end;
 use crate::events::{MessageSendEventsProvider, OnionMessageProvider};
 use crate::util::logger;
 use crate::util::ser::{LengthReadable, Readable, ReadableArgs, Writeable, Writer, WithoutLength, FixedLengthReader, HighZeroBytesDroppedBigSize, Hostname, TransactionU16LenLimited, BigSize};
-
-use crate::ln::{PaymentPreimage, PaymentHash, PaymentSecret};
 
 use crate::routing::gossip::{NodeAlias, NodeId};
 
@@ -2477,7 +2475,7 @@ mod tests {
 	use bitcoin::{Transaction, PackedLockTime, TxIn, Script, Sequence, Witness, TxOut};
 	use hex;
 	use crate::ln::{PaymentPreimage, PaymentHash, PaymentSecret};
-	use crate::ln::channel::ChannelId;
+	use crate::ln::ChannelId;
 	use crate::ln::features::{ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
 	use crate::ln::msgs::{self, FinalOnionHopData, OnionErrorPacket};
 	use crate::routing::gossip::{NodeAlias, NodeId};

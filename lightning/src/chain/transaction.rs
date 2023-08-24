@@ -9,7 +9,7 @@
 
 //! Types describing on-chain transactions.
 
-use crate::ln::channel::ChannelId;
+use crate::ln::ChannelId;
 use bitcoin::hash_types::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::blockdata::transaction::OutPoint as BitcoinOutPoint;

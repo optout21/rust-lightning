@@ -39,8 +39,8 @@ use crate::events;
 use crate::events::{Event, EventHandler, EventsProvider, MessageSendEvent, MessageSendEventsProvider, ClosureReason, HTLCDestination, PaymentFailureReason};
 // Since this struct is returned in `list_channels` methods, expose it here in case users want to
 // construct one themselves.
-use crate::ln::{inbound_payment, PaymentHash, PaymentPreimage, PaymentSecret};
-use crate::ln::channel::{Channel, ChannelContext, ChannelError, ChannelId, ChannelUpdateStatus, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, OutboundV1Channel, InboundV1Channel};
+use crate::ln::{inbound_payment, ChannelId, PaymentHash, PaymentPreimage, PaymentSecret};
+use crate::ln::channel::{Channel, ChannelContext, ChannelError, ChannelUpdateStatus, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, OutboundV1Channel, InboundV1Channel};
 use crate::ln::features::{ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
 #[cfg(any(feature = "_test_utils", test))]
 use crate::ln::features::Bolt11InvoiceFeatures;
@@ -9408,7 +9408,7 @@ mod tests {
 	use core::sync::atomic::Ordering;
 	use crate::events::{Event, HTLCDestination, MessageSendEvent, MessageSendEventsProvider, ClosureReason};
 	use crate::ln::{PaymentPreimage, PaymentHash, PaymentSecret};
-	use crate::ln::channel::ChannelId;
+	use crate::ln::ChannelId;
 	use crate::ln::channelmanager::{inbound_payment, PaymentId, PaymentSendFailure, RecipientOnionFields, InterceptId};
 	use crate::ln::functional_test_utils::*;
 	use crate::ln::msgs::{self, ErrorAction};

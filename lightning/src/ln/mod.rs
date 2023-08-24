@@ -13,6 +13,7 @@
 #[macro_use]
 pub mod functional_test_utils;
 
+pub mod channel_id;
 pub mod channelmanager;
 pub mod inbound_payment;
 pub mod msgs;
@@ -30,6 +31,9 @@ pub(crate) mod peer_channel_encryptor;
 pub mod channel;
 #[cfg(not(fuzzing))]
 pub(crate) mod channel;
+
+// Re-export ChannelId
+pub use self::channel_id::ChannelId;
 
 pub(crate) mod onion_utils;
 mod outbound_payment;
@@ -66,9 +70,6 @@ mod monitor_tests;
 #[cfg(test)]
 #[allow(unused_mut)]
 mod shutdown_tests;
-
-// Re-export ChannelId
-pub use self::channel::ChannelId;
 
 pub use self::peer_channel_encryptor::LN_MAX_MSG_LEN;
 

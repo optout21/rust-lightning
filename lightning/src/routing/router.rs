@@ -2677,7 +2677,7 @@ mod tests {
 	use crate::routing::test_utils::{add_channel, add_or_update_node, build_graph, build_line_graph, id_to_feature_flags, get_nodes, update_channel};
 	use crate::chain::transaction::OutPoint;
 	use crate::sign::EntropySource;
-	use crate::ln::channel::ChannelId;
+	use crate::ln::ChannelId;
 	use crate::ln::features::{BlindedHopFeatures, Bolt12InvoiceFeatures, ChannelFeatures, InitFeatures, NodeFeatures};
 	use crate::ln::msgs::{ErrorAction, LightningError, UnsignedChannelUpdate, MAX_VALUE_MSAT};
 	use crate::ln::channelmanager;
@@ -6723,7 +6723,7 @@ pub(crate) mod bench_utils {
 
 	use crate::chain::transaction::OutPoint;
 	use crate::sign::{EntropySource, KeysManager};
-	use crate::ln::channel::ChannelId;
+	use crate::ln::ChannelId;
 	use crate::ln::channelmanager::{self, ChannelCounterparty, ChannelDetails};
 	use crate::ln::features::Bolt11InvoiceFeatures;
 	use crate::routing::gossip::NetworkGraph;

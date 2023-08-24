@@ -20,10 +20,10 @@ pub use bump_transaction::BumpTransactionEvent;
 
 use crate::sign::SpendableOutputDescriptor;
 use crate::ln::channelmanager::{InterceptId, PaymentId, RecipientOnionFields};
-use crate::ln::channel::{ChannelId, FUNDING_CONF_DEADLINE_BLOCKS};
+use crate::ln::channel::FUNDING_CONF_DEADLINE_BLOCKS;
 use crate::ln::features::ChannelTypeFeatures;
 use crate::ln::msgs;
-use crate::ln::{PaymentPreimage, PaymentHash, PaymentSecret};
+use crate::ln::{ChannelId, PaymentPreimage, PaymentHash, PaymentSecret};
 use crate::routing::gossip::NetworkUpdate;
 use crate::util::errors::APIError;
 use crate::util::ser::{BigSize, FixedLengthReader, Writeable, Writer, MaybeReadable, Readable, RequiredWrapper, UpgradableRequired, WithoutLength};

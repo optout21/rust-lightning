@@ -20,7 +20,7 @@ use crate::chain::transaction::OutPoint;
 use crate::sign;
 use crate::events;
 use crate::events::bump_transaction::{WalletSource, Utxo};
-use crate::ln::channel::ChannelId;
+use crate::ln::ChannelId;
 use crate::ln::channelmanager;
 use crate::ln::chan_utils::CommitmentTransaction;
 use crate::ln::features::{ChannelFeatures, InitFeatures, NodeFeatures};

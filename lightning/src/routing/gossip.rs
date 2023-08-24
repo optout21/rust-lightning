@@ -23,7 +23,7 @@ use bitcoin::network::constants::Network;
 use bitcoin::blockdata::constants::genesis_block;
 
 use crate::events::{MessageSendEvent, MessageSendEventsProvider};
-use crate::ln::channel::ChannelId;
+use crate::ln::ChannelId;
 use crate::ln::features::{ChannelFeatures, NodeFeatures, InitFeatures};
 use crate::ln::msgs::{DecodeError, ErrorAction, Init, LightningError, RoutingMessageHandler, NetAddress, MAX_VALUE_MSAT};
 use crate::ln::msgs::{ChannelAnnouncement, ChannelUpdate, NodeAnnouncement, GossipTimestampFilter};
