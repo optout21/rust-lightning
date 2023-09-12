@@ -13,7 +13,10 @@ use crate::ln::msgs::DecodeError;
 use crate::sign::EntropySource;
 use crate::util::ser::{Readable, Writeable, Writer};
 
+use bitcoin::hashes::Hash;
 use bitcoin::hashes::hex::ToHex;
+use bitcoin::hashes::sha256::Hash as Sha256;
+use bitcoin::secp256k1::PublicKey;
 
 use crate::io;
 use crate::prelude::*;
@@ -63,6 +66,28 @@ impl ChannelId {
 	/// Check whether ID is consisting of all zeros (uninitialized)
 	pub fn is_zero(&self) -> bool {
 		self.0[..] == [0; 32]
+	}
+
+	/// Create _v2_ channel ID by concatenating the holder revocation basepoint with the counterparty
+	/// revocation basepoint and hashing the result. The basepoints will be concatenated in increasing
+	/// sorted order.
+	pub fn v2_from_revocation_basepoints(
+		ours: &PublicKey,
+		theirs: &PublicKey,
+	) -> Self {
+		let (lesser_point, greater_point) = if *ours < *theirs {
+			(ours, theirs)
+		} else {
+			(theirs, ours)
+		};
+
+		Self(Sha256::hash(&[lesser_point.serialize(), greater_point.serialize()].concat()).into_inner())
+	}
+
+	/// Create temporary _v2_ channel ID by concatenating a zeroed out basepoint with the holder
+	/// revocation basepoint and hashing the result.
+	pub fn temporary_v2_from_revocation_basepoint(our_revocation_basepoint: &PublicKey) -> Self {
+		Self(Sha256::hash(&[[0u8; 33], our_revocation_basepoint.serialize()].concat()).into_inner())
 	}
 }
 
