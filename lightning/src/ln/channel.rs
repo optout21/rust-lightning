@@ -632,6 +632,8 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
 	UnfundedOutboundV1(OutboundV1Channel<SP>),
 	UnfundedInboundV1(InboundV1Channel<SP>),
+	UnfundedOutboundV2(OutboundV2Channel<SP>),
+	UnfundedInboundV2(InboundV2Channel<SP>),
 	Funded(Channel<SP>),
 }
 
@@ -644,6 +646,8 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			ChannelPhase::Funded(chan) => &chan.context,
 			ChannelPhase::UnfundedOutboundV1(chan) => &chan.context,
 			ChannelPhase::UnfundedInboundV1(chan) => &chan.context,
+			ChannelPhase::UnfundedOutboundV2(chan) => &chan.context,
+			ChannelPhase::UnfundedInboundV2(chan) => &chan.context,
 		}
 	}
 
@@ -652,6 +656,8 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			ChannelPhase::Funded(ref mut chan) => &mut chan.context,
 			ChannelPhase::UnfundedOutboundV1(ref mut chan) => &mut chan.context,
 			ChannelPhase::UnfundedInboundV1(ref mut chan) => &mut chan.context,
+			ChannelPhase::UnfundedOutboundV2(ref mut chan) => &mut chan.context,
+			ChannelPhase::UnfundedInboundV2(ref mut chan) => &mut chan.context,
 		}
 	}
 }
