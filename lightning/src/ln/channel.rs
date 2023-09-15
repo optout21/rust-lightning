@@ -20,11 +20,11 @@ use bitcoin::hash_types::{Txid, BlockHash};
 use bitcoin::secp256k1::constants::PUBLIC_KEY_SIZE;
 use bitcoin::secp256k1::{PublicKey,SecretKey};
 use bitcoin::secp256k1::{Secp256k1,ecdsa::Signature};
-use bitcoin::{secp256k1, TxIn};
+use bitcoin::{secp256k1, TxIn, PackedLockTime, TxOut};
 
 use crate::ln::{ChannelId, PaymentPreimage, PaymentHash};
 use crate::ln::features::{ChannelTypeFeatures, InitFeatures};
-use crate::ln::interactivetxs::InteractiveTxConstructor;
+use crate::ln::interactivetxs::{InteractiveTxConstructor, InteractiveTxMessageSend};
 use crate::ln::msgs;
 use crate::ln::msgs::DecodeError;
 use crate::ln::script::{self, ShutdownScript};
@@ -2076,6 +2076,65 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 		self.channel_state = ChannelState::ShutdownComplete as u32;
 		self.update_time_counter += 1;
 		(monitor_update, dropped_outbound_htlcs, unbroadcasted_batch_funding_txid)
+	}
+
+	// Interactive transaction construction
+
+	pub fn tx_add_input(&mut self, msg: &msgs::TxAddInput) -> Result<InteractiveTxMessageSend, ChannelError> {
+		match self.interactive_tx_constructor {
+			Some(ref mut tx_constructor) => tx_constructor.handle_tx_add_input(msg).map_err(
+				|_| ChannelError::Close("".to_string())),
+			None => Err(ChannelError::Close("Unexpected tx_add_input received".to_string())),
+		}
+	}
+
+	pub fn tx_add_output(&mut self, msg: &msgs::TxAddOutput)-> Result<InteractiveTxMessageSend, ChannelError> {
+		match self.interactive_tx_constructor {
+			Some(ref mut tx_constructor) => tx_constructor.handle_tx_add_output(msg).map_err(
+				|_| ChannelError::Close("".to_string())),
+			None => Err(ChannelError::Close("Unexpected tx_add_output received".to_string())),
+		}
+	}
+
+	pub fn tx_remove_input(&mut self, msg: &msgs::TxRemoveInput)-> Result<InteractiveTxMessageSend, ChannelError> {
+		match self.interactive_tx_constructor {
+			Some(ref mut tx_constructor) => tx_constructor.handle_tx_remove_input(msg).map_err(
+				|_| ChannelError::Close("".to_string())),
+			None => Err(ChannelError::Close("Unexpected tx_remove_input received".to_string())),
+		}
+	}
+
+	pub fn tx_remove_output(&mut self, msg: &msgs::TxRemoveOutput)-> Result<InteractiveTxMessageSend, ChannelError> {
+		match self.interactive_tx_constructor {
+			Some(ref mut tx_constructor) => tx_constructor.handle_tx_remove_output(msg).map_err(
+				|_| ChannelError::Close("".to_string())),
+			None => Err(ChannelError::Close("Unexpected tx_remove_output received".to_string())),
+		}
+	}
+
+	pub fn tx_complete(&mut self, msg: &msgs::TxComplete)
+	-> Result<(Option<InteractiveTxMessageSend>, Option<Transaction>), ChannelError> {
+		match self.interactive_tx_constructor {
+			Some(ref mut tx_constructor) => tx_constructor.handle_tx_complete(msg).map_err(
+				|_| ChannelError::Close("".to_string())),
+			None => Err(ChannelError::Close("Unexpected tx_complete received".to_string())),
+		}
+	}
+
+	pub fn tx_signatures(&self, msg: &msgs::TxSignatures)-> Result<InteractiveTxMessageSend, ChannelError> {
+		todo!();
+	}
+
+	pub fn tx_init_rbf(&self, msg: &msgs::TxInitRbf)-> Result<InteractiveTxMessageSend, ChannelError> {
+		todo!();
+	}
+
+	pub fn tx_ack_rbf(&self, msg: &msgs::TxAckRbf)-> Result<InteractiveTxMessageSend, ChannelError> {
+		todo!();
+	}
+
+	pub fn tx_abort(&self, msg: &msgs::TxAbort)-> Result<InteractiveTxMessageSend, ChannelError> {
+		todo!();
 	}
 }
 
@@ -7243,6 +7302,38 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 			}
 		}
 
+		// Check our contribution and provided inputs.
+		if funding_satoshis > 0 && funding_satoshis < 1000 {
+			return Err(ChannelError::Close(format!("Funding contribution must be at least 1000 satoshis. It was {} sats", funding_satoshis)));
+		}
+		// Check that vouts exist for each TxIn in provided transactions.
+		for (idx, input) in funding_inputs.iter().enumerate() {
+			if input.1.output.get(input.0.previous_output.vout as usize).is_none() {
+				return Err(ChannelError::Close(
+					format!("Transaction with txid {} does not have an output with vout of {} corresponding to TxIn at funding_inputs[{}]",
+						input.1.txid(), input.0.previous_output.vout, idx)));
+			}
+		}
+		let total_input_satoshis: u64 = funding_inputs.iter().map(|input| input.1.output[input.0.previous_output.vout as usize].value).sum();
+		if total_input_satoshis < funding_satoshis {
+			return Err(ChannelError::Close(
+				format!("Total value of funding inputs must be at least funding amount. It was {} sats",
+					total_input_satoshis)));
+		}
+		let change_value = funding_satoshis - total_input_satoshis;
+		let funding_outputs = if change_value == 0 {
+			vec![]
+		} else {
+			let change_script = signer_provider.get_shutdown_scriptpubkey().map_err(
+				|_| ChannelError::Close("Failed to get change scriptpubkey as new shutdown scriptpubkey".to_owned())
+			)?.into_inner();
+
+			vec![TxOut {
+				value: change_value,
+				script_pubkey: change_script,
+			}]
+		};
+
 		let destination_script = match signer_provider.get_destination_script() {
 			Ok(script) => script,
 			Err(_) => return Err(ChannelError::Close("Failed to get destination script".to_owned())),
@@ -7250,6 +7341,8 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 
 		let mut secp_ctx = Secp256k1::new();
 		secp_ctx.seeded_randomize(&entropy_source.get_secure_random_bytes());
+
+		let channel_id = ChannelId::v2_from_revocation_basepoints(&pubkeys.revocation_basepoint, &counterparty_pubkeys.revocation_basepoint);
 
 		let chan = Self {
 			context: ChannelContext {
@@ -7266,7 +7359,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 				inbound_handshake_limits_override: None,
 
 				temporary_channel_id: Some(msg.temporary_channel_id),
-				channel_id: msg.temporary_channel_id,
+				channel_id,
 				channel_state: (ChannelState::OurInitSent as u32) | (ChannelState::TheirInitSent as u32),
 				announcement_sigs_state: AnnouncementSigsState::NotSent,
 				secp_ctx,
@@ -7379,7 +7472,9 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 
 				blocked_monitor_updates: Vec::new(),
 
-				interactive_tx_constructor: None,
+				interactive_tx_constructor: Some(InteractiveTxConstructor::new(
+					entropy_source, channel_id, msg.funding_feerate_sat_per_1000_weight, false /* is_initiator */,
+					PackedLockTime(msg.locktime), funding_inputs, funding_outputs).0),
 			},
 			unfunded_context: UnfundedChannelContext { unfunded_channel_age_ticks: 0 },
 			dual_funding_context: DualFundingChannelContext {
