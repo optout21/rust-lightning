@@ -21,6 +21,7 @@ use crate::sign::EntropySource;
 use core::ops::Deref;
 use std::io::sink;
 use bitcoin::consensus::Encodable;
+use crate::events::bump_transaction::{BASE_INPUT_WEIGHT, EMPTY_SCRIPT_SIG_WEIGHT};
 use crate::util::ser::TransactionU16LenLimited;
 
 /// The number of received `tx_add_input` messages during a negotiation at which point the
@@ -320,11 +321,8 @@ impl NegotiationContext {
 			return Err(AbortReason::TransactionTooLarge);
 		}
 
-		// TODO:
-		// - Use existing rust-lightning/rust-bitcoin constants.
-		// - How do we enforce their fees cover the witness without knowing its expected length?
-		// 	 - Read eclair's code to see if they do this?
-		const INPUT_WEIGHT: u64 = (32 + 4 + 4) * WITNESS_SCALE_FACTOR as u64;
+		// TODO: How do we enforce their fees cover the witness without knowing its expected length?
+		const INPUT_WEIGHT: u64 = BASE_INPUT_WEIGHT + EMPTY_SCRIPT_SIG_WEIGHT;
 
 		// - the peer's paid feerate does not meet or exceed the agreed feerate (based on the minimum fee).
 		let counterparty_output_weight_contributed: u64 = counterparty_outputs_contributed.clone().map(|output|
