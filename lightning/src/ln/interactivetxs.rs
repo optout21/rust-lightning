@@ -545,7 +545,7 @@ impl StateMachine {
 
 pub struct InteractiveTxConstructor {
 	state_machine: StateMachine,
-	channel_id: [u8; 32],
+	channel_id: ChannelId,
 	is_initiator: bool,
 	inputs_to_contribute: Vec<(SerialId, TxIn, Transaction)>,
 	outputs_to_contribute: Vec<(SerialId, TxOut)>,
@@ -571,7 +571,7 @@ macro_rules! do_state_transition {
 // TODO: Check spec to see if it dictates what needs to happen if a node receives an unexpected message.
 impl InteractiveTxConstructor {
 	pub fn new<ES: Deref>(
-		entropy_source: &ES, channel_id: [u8; 32], feerate_sat_per_kw: u32, is_initiator: bool,
+		entropy_source: &ES, channel_id: ChannelId, feerate_sat_per_kw: u32, is_initiator: bool,
 		tx_locktime: PackedLockTime, inputs_to_contribute: Vec<(TxIn, Transaction)>,
 		outputs_to_contribute: Vec<TxOut>,
 	) -> (Self, Option<InteractiveTxMessageSend>) where ES::Target: EntropySource {
@@ -617,7 +617,7 @@ impl InteractiveTxConstructor {
 	fn do_local_state_transition(&mut self) -> Result<InteractiveTxMessageSend, ()> {
 		if let Some((serial_id, input, prev_tx)) = self.inputs_to_contribute.pop() {
 			let msg = msgs::TxAddInput {
-				channel_id: ChannelId(self.channel_id),
+				channel_id: self.channel_id,
 				serial_id,
 				prevtx: TransactionU16LenLimited(prev_tx),
 				prevtx_out: input.previous_output.vout,
@@ -627,7 +627,7 @@ impl InteractiveTxConstructor {
 			Ok(InteractiveTxMessageSend::TxAddInput(msg))
 		} else if let Some((serial_id, output)) = self.outputs_to_contribute.pop() {
 			let msg = msgs::TxAddOutput {
-				channel_id: ChannelId(self.channel_id),
+				channel_id: self.channel_id,
 				serial_id,
 				sats: output.value,
 				script: output.script_pubkey,
@@ -635,7 +635,7 @@ impl InteractiveTxConstructor {
 			let _ = do_state_transition!(self, local_tx_add_output, &msg)?;
 			Ok(InteractiveTxMessageSend::TxAddOutput(msg))
 		} else {
-			let msg = msgs::TxComplete { channel_id: ChannelId(self.channel_id) };
+			let msg = msgs::TxComplete { channel_id: self.channel_id };
 			let _ = do_state_transition!(self, local_tx_complete, &msg)?;
 			Ok(InteractiveTxMessageSend::TxComplete(msg))
 		}
