@@ -436,6 +436,7 @@ pub struct ChannelReady {
 	pub short_channel_id_alias: Option<u64>,
 }
 
+/// ID for an interactive TX negotiation message
 pub type SerialId = u64;
 
 /// A tx_add_input message for adding an input during interactive transaction construction

@@ -331,10 +331,17 @@ impl NegotiationContext {
 		).sum();
 		let counterparty_weight_contributed = counterparty_output_weight_contributed +
 			counterparty_inputs_contributed.clone().count() as u64 * INPUT_WEIGHT;
-		let counterparty_fees_contributed =
-			counterparty_inputs_value.saturating_sub(counterparty_outputs_value);
-		let mut required_counterparty_contribution_fee =
-			self.feerate_sat_per_kw as u64 * 1000 / counterparty_weight_contributed;
+		let (counterparty_fees_contributed, mut required_counterparty_contribution_fee) = if counterparty_weight_contributed == 0 {
+			(0, 0)
+		} else {
+			debug_assert!(counterparty_weight_contributed != 0);
+			let counterparty_fees_contributed =
+				counterparty_inputs_value.saturating_sub(counterparty_outputs_value);
+			let required_counterparty_contribution_fee =
+				self.feerate_sat_per_kw as u64 * 1000 / counterparty_weight_contributed;
+			(counterparty_fees_contributed, required_counterparty_contribution_fee)
+		};
+
 		if !self.holder_is_initiator {
 		    // if is the non-initiator:
 		    // 	- the initiator's fees do not cover the common fields (version, segwit marker + flag,
@@ -384,7 +391,7 @@ macro_rules! define_state {
 	($state: ident, $inner: ident, $doc: expr) => {
 		#[doc = $doc]
 		#[derive(Debug)]
-		struct $state($inner);
+		pub(crate) struct $state($inner);
 		impl State for $state {}
 	};
 }
@@ -461,7 +468,7 @@ define_state_transitions!(TX_COMPLETE, LocalTxComplete);
 define_state_transitions!(TX_COMPLETE, RemoteTxComplete);
 
 #[derive(Debug)]
-enum StateMachine {
+pub(crate) enum StateMachine {
 	Indeterminate,
 	LocalChange(LocalChange),
 	RemoteChange(RemoteChange),
@@ -549,7 +556,7 @@ pub struct InteractiveTxConstructor<ES: Deref>
 		ES::Target: EntropySource,
 {
 	state_machine: StateMachine,
-	channel_id: [u8; 32],
+	channel_id: ChannelId,
 	is_initiator: bool,
 	entropy_source: ES,
 	inputs_to_contribute: Vec<(TxIn, Transaction)>,
@@ -562,12 +569,17 @@ pub enum InteractiveTxMessageSend {
 	TxComplete(msgs::TxComplete),
 }
 
+// TODO should return error (NegotiationError)
 macro_rules! do_state_transition {
 	($self: ident, $transition: ident, $msg: expr) => {{
 		let state_machine = core::mem::take(&mut $self.state_machine);
 		$self.state_machine = state_machine.$transition($msg);
 		match &$self.state_machine {
-			StateMachine::NegotiationAborted(_) => Err(()),
+			StateMachine::NegotiationAborted(_ab) => {
+				// TODO revert
+				// panic!("do_State_transition error {:?}", ab);
+				Err(())
+			},
 			_ => Ok(()),
 		}
 	}};
@@ -578,8 +590,9 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 	where
 		ES::Target: EntropySource,
 {
+	// TODO: channel_id should be ChannelId
 	pub fn new(
-		entropy_source: ES, channel_id: [u8; 32], feerate_sat_per_kw: u32, is_initiator: bool,
+		entropy_source: ES, channel_id: ChannelId, feerate_sat_per_kw: u32, is_initiator: bool,
 		tx_locktime: PackedLockTime, inputs_to_contribute: Vec<(TxIn, Transaction)>,
 		outputs_to_contribute: Vec<TxOut>,
 	) -> (Self, Option<InteractiveTxMessageSend>) {
@@ -617,10 +630,11 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 		serial_id
 	}
 
+	// TODO Should return error
 	fn do_local_state_transition(&mut self) -> Result<InteractiveTxMessageSend, ()> {
 		if let Some((input, prev_tx)) = self.inputs_to_contribute.pop() {
 			let msg = msgs::TxAddInput {
-				channel_id: ChannelId(self.channel_id),
+				channel_id: self.channel_id,
 				serial_id: self.generate_local_serial_id(),
 				prevtx: TransactionU16LenLimited(prev_tx),
 				prevtx_out: input.previous_output.vout,
@@ -630,7 +644,7 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 			Ok(InteractiveTxMessageSend::TxAddInput(msg))
 		} else if let Some(output) = self.outputs_to_contribute.pop() {
 			let msg = msgs::TxAddOutput {
-				channel_id: ChannelId(self.channel_id),
+				channel_id: self.channel_id,
 				serial_id: self.generate_local_serial_id(),
 				sats: output.value,
 				script: output.script_pubkey,
@@ -638,7 +652,7 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 			let _ = do_state_transition!(self, local_tx_add_output, &msg)?;
 			Ok(InteractiveTxMessageSend::TxAddOutput(msg))
 		} else {
-			let msg = msgs::TxComplete { channel_id: ChannelId(self.channel_id) };
+			let msg = msgs::TxComplete { channel_id: self.channel_id };
 			let _ = do_state_transition!(self, local_tx_complete, &msg)?;
 			Ok(InteractiveTxMessageSend::TxComplete(msg))
 		}
@@ -686,88 +700,8 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 			}
 		}
 	}
+
+	#[cfg(test)]
+	pub(crate) fn get_state_machine(&self) -> &StateMachine { &self.state_machine }
 }
 
-// #[cfg(test)]
-// mod tests {
-// 	use core::str::FromStr;
-// 	use crate::chain::chaininterface::FEERATE_FLOOR_SATS_PER_KW;
-// use crate::ln::interactivetxs::ChannelMode::{Negotiating, NegotiationAborted};
-// 	use crate::ln::interactivetxs::{AbortReason, ChannelMode, InteractiveTxConstructor, InteractiveTxStateMachine};
-// 	use crate::ln::msgs::TransactionU16LenLimited;
-// 	use bitcoin::consensus::encode;
-// 	use bitcoin::{Address, PackedLockTime, Script, Sequence, Transaction, Txid, TxIn, TxOut, Witness};
-// 	use bitcoin::hashes::hex::FromHex;
-// 	use crate::chain::transaction::OutPoint;
-// 	use crate::ln::interactivetxs::AbortReason::IncorrectSerialIdParity;
-// 	use crate::ln::msgs::TxAddInput;
-//
-// 	#[test]
-// 	fn test_invalid_counterparty_serial_id_should_abort_negotiation() {
-// 		let tx: Transaction = encode::deserialize(&hex::decode("020000000001010e0ade\
-// 			f48412e4361325ac1c6e36411299ab09d4f083b9d8ddb55fbc06e1b0c00000000000feffffff0220a107000\
-// 			0000000220020f81d95e040bd0a493e38bae27bff52fe2bb58b93b293eb579c01c31b05c5af1dc072cfee54\
-// 			a3000016001434b1d6211af5551905dc2642d05f5b04d25a8fe80247304402207f570e3f0de50546aad25a8\
-// 			72e3df059d277e776dda4269fa0d2cc8c2ee6ec9a022054e7fae5ca94d47534c86705857c24ceea3ad51c69\
-// 			dd6051c5850304880fc43a012103cb11a1bacc223d98d91f1946c6752e358a5eb1a1c983b3e6fb15378f453\
-// 			b76bd00000000").unwrap()[..]).unwrap();
-// 		let mut constructor = InteractiveTxConstructor::new([0; 32], FEERATE_FLOOR_SATS_PER_KW, true, true, tx, false);
-// 		constructor.receive_tx_add_input(2, &get_sample_tx_add_input(), false);
-// 		assert!(matches!(constructor.mode, ChannelMode::NegotiationAborted { .. }))
-// 	}
-//
-// 	impl DummyChannel {
-// 		fn new() -> Self {
-// 			let tx: Transaction = encode::deserialize(&hex::decode("020000000001010e0ade\
-// 			f48412e4361325ac1c6e36411299ab09d4f083b9d8ddb55fbc06e1b0c00000000000feffffff0220a107000\
-// 			0000000220020f81d95e040bd0a493e38bae27bff52fe2bb58b93b293eb579c01c31b05c5af1dc072cfee54\
-// 			a3000016001434b1d6211af5551905dc2642d05f5b04d25a8fe80247304402207f570e3f0de50546aad25a8\
-// 			72e3df059d277e776dda4269fa0d2cc8c2ee6ec9a022054e7fae5ca94d47534c86705857c24ceea3ad51c69\
-// 			dd6051c5850304880fc43a012103cb11a1bacc223d98d91f1946c6752e358a5eb1a1c983b3e6fb15378f453\
-// 			b76bd00000000").unwrap()[..]).unwrap();
-// 			Self {
-// 				tx_constructor: InteractiveTxConstructor::new([0; 32], FEERATE_FLOOR_SATS_PER_KW, true, true, tx, false)
-// 			}
-// 		}
-//
-// 		fn handle_add_tx_input(&mut self) {
-// 			self.tx_constructor.receive_tx_add_input(1234, &get_sample_tx_add_input(), true)
-// 		}
-// 	}
-//
-// 	// Fixtures
-// 	fn get_sample_tx_add_input() -> TxAddInput {
-// 		let prevtx = TransactionU16LenLimited::new(
-// 			Transaction {
-// 				version: 2,
-// 				lock_time: PackedLockTime(0),
-// 				input: vec![TxIn {
-// 					previous_output: OutPoint { txid: Txid::from_hex("305bab643ee297b8b6b76b320792c8223d55082122cb606bf89382146ced9c77").unwrap(), index: 2 }.into_bitcoin_outpoint(),
-// 					script_sig: Script::new(),
-// 					sequence: Sequence(0xfffffffd),
-// 					witness: Witness::from_vec(vec![
-// 						hex::decode("304402206af85b7dd67450ad12c979302fac49dfacbc6a8620f49c5da2b5721cf9565ca502207002b32fed9ce1bf095f57aeb10c36928ac60b12e723d97d2964a54640ceefa701").unwrap(),
-// 						hex::decode("0301ab7dc16488303549bfcdd80f6ae5ee4c20bf97ab5410bbd6b1bfa85dcd6944").unwrap()]),
-// 				}],
-// 				output: vec![
-// 					TxOut {
-// 						value: 12704566,
-// 						script_pubkey: Address::from_str("bc1qzlffunw52jav8vwdu5x3jfk6sr8u22rmq3xzw2").unwrap().script_pubkey(),
-// 					},
-// 					TxOut {
-// 						value: 245148,
-// 						script_pubkey: Address::from_str("bc1qxmk834g5marzm227dgqvynd23y2nvt2ztwcw2z").unwrap().script_pubkey(),
-// 					},
-// 				],
-// 			}
-// 		).unwrap();
-//
-// 		return TxAddInput {
-// 			channel_id: [2; 32],
-// 			serial_id: 4886718345,
-// 			prevtx,
-// 			prevtx_out: 305419896,
-// 			sequence: 305419896,
-// 		};
-// 	}
-// }
