@@ -16,19 +16,35 @@ mod tests {
 	use crate::ln::ChannelId;
 	use crate::sign::EntropySource;
 	use crate::util::ser::TransactionU16LenLimited;
+	use crate::util::atomic_counter::AtomicCounter;
 	use bitcoin::hash_types::WPubkeyHash;
 	use bitcoin::hashes::Hash;
 	use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 	use bitcoin::{PackedLockTime, Script, Sequence, Transaction, TxIn, TxOut, Witness};
+	use crate::util::chacha20::ChaCha20;
 	use core::ops::Deref;
 
 	// Fixtures
 
-	struct TestEntropySource;
+	/// Returns pseudo-random data
+	/// TODO: Maybe this could be moved to test_utils?
+	struct TestEntropySource {
+		/// Tracks the number of times we've produced randomness to ensure we don't return the same bytes twice.
+		rand_bytes_index: AtomicCounter,
+	}
+
+	impl TestEntropySource {
+		fn new() -> Self {
+			Self { rand_bytes_index: AtomicCounter::new() }
+		}
+	}
 
 	impl EntropySource for TestEntropySource {
 		fn get_secure_random_bytes(&self) -> [u8; 32] {
-			[42; 32]
+			let index = self.rand_bytes_index.get_increment();
+			let mut nonce = [0u8; 16];
+			nonce[..8].copy_from_slice(&index.to_be_bytes());
+			ChaCha20::get_single_block(&[42; 32], &nonce)
 		}
 	}
 
@@ -342,7 +358,7 @@ mod tests {
 		expected_initial_state: ExInvRes,
 		invocations: Vec<Invoke>,
 	) {
-		let entropy_source = TestEntropySource {};
+		let entropy_source = TestEntropySource::new();
 		let (mut interact, msg) = InteractiveTxConstructor::new(
 			&entropy_source,
 			channel_id,
@@ -748,8 +764,7 @@ mod tests {
 					expected_state: ExInvRes::ok(
 						ExSt::NegComp,
 						Some(ExMsg::Comp),
-						// TODO here it should be 2!!!
-						Some(ExTx::new(1, 1)),
+						Some(ExTx::new(2, 2)),
 					),
 				},
 			],
