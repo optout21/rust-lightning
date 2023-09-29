@@ -391,6 +391,16 @@ mod tests {
 	}
 
 	// Test cases
+	//
+	// A note on naming of the tests cases:
+	// - 'init' is short for initiator
+	// - 'noni' is short for noninitiator
+	// The follows a sequence of one-letter codes indicating added inputs and outputs, as follows:
+	// - 'I': for local-added input
+	// - 'O': for local-added output
+	// - 'j': for remote-added input (letter j is somewhat similar to i)
+	// - 'u': for remote-added output (letter u is somewhat similar to o, also second letter in out)
+	// They are listed in the order they are added, e.g.: _IjOjjju_
 
 	#[test]
 	fn test_interact_tx_noni_construct() {
@@ -419,7 +429,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_ri_ro_complete() {
+	fn test_interact_tx_noni_ju_complete() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -445,7 +455,8 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_init_li_lo_complete() {
+	#[allow(non_snake_case)]
+	fn test_interact_tx_init_IO_complete() {
 		let channel_id = get_sample_channel_id();
 		let inputs = vec![(get_sample_tx_input(), get_sample_input_tx())];
 		let outputs = vec![get_sample_tx_output()];
@@ -473,7 +484,8 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_li_lo_complete() {
+	#[allow(non_snake_case)]
+	fn test_interact_tx_noni_IO_complete() {
 		let channel_id = get_sample_channel_id();
 		let inputs = vec![(get_sample_tx_input(), get_sample_input_tx())];
 		let outputs = vec![get_sample_tx_output()];
@@ -506,7 +518,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_init_ri_ro_complete() {
+	fn test_interact_tx_init_ju_complete() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -571,7 +583,8 @@ mod tests {
 
 	// Both parties contribute
 	#[test]
-	fn test_interact_tx_init_li_ri_lo_ro_complete() {
+	#[allow(non_snake_case)]
+	fn test_interact_tx_init_IjOu_complete() {
 		let channel_id = get_sample_channel_id();
 		let inputs = vec![(get_sample_tx_input(), get_sample_input_tx())];
 		let outputs = vec![get_sample_tx_output()];
@@ -599,7 +612,8 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_ri_li_ro_lo_complete() {
+	#[allow(non_snake_case)]
+	fn test_interact_tx_noni_jIuO_complete() {
 		let channel_id = get_sample_channel_id();
 		let inputs = vec![(get_sample_tx_input(), get_sample_input_tx())];
 		let outputs = vec![get_sample_tx_output()];
@@ -632,7 +646,7 @@ mod tests {
 
 	// TODO: no abort support!
 	// #[test]
-	// fn test_interact_tx_noni_ri_ro_abort() {
+	// fn test_interact_tx_noni_j_u_abort() {
 	// 	let entropy_source = TestEntropySource{};
 	// 	let channel_id = get_sample_channel_id();
 	// 	let (mut interact, msg) = InteractiveTxConstructor::new(&entropy_source, channel_id, FEERATE_FLOOR_SATS_PER_KW, false, PackedLockTime::ZERO, vec![], vec![]);
@@ -644,7 +658,7 @@ mod tests {
 	// }
 
 	#[test]
-	fn test_interact_tx_noni_ri_ri_ro_ro_complete() {
+	fn test_interact_tx_noni_jjuu_complete() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -678,7 +692,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_ri_ro_ri_ro_complete() {
+	fn test_interact_tx_noni_juju_complete() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -712,7 +726,8 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_init_li_li_lo_lo_complete() {
+	#[allow(non_snake_case)]
+	fn test_interact_tx_init_IIOO_complete() {
 		let channel_id = get_sample_channel_id();
 		let inputs = vec![
 			(get_sample_tx_input(), get_sample_input_tx()),
