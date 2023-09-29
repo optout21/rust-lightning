@@ -76,11 +76,10 @@ mod tests {
 		PublicKey::from_secret_key(&secp_ctx, &secret_key)
 	}
 
-	fn get_sample_input_tx() -> Transaction {
-		let pubkey = get_sample_pubkey(11);
+	fn get_sample_input_tx_intern(pubkey: PublicKey, value: u64) -> Transaction {
 		let script_pubkey = Script::new_v0_p2wpkh(&WPubkeyHash::hash(&pubkey.serialize()));
 		let output = TxOut {
-			value: 550011,
+			value,
 			script_pubkey,
 		};
 		Transaction {
@@ -89,43 +88,34 @@ mod tests {
 			output: vec![output],
 			input: vec![],
 		}
+	}
+
+	fn get_sample_input_tx() -> Transaction {
+		get_sample_input_tx_intern(get_sample_pubkey(11), 550011)
 	}
 
 	fn get_sample_input_tx_2() -> Transaction {
-		let pubkey = get_sample_pubkey(12);
-		let script_pubkey = Script::new_v0_p2wpkh(&WPubkeyHash::hash(&pubkey.serialize()));
-		let output = TxOut {
-			value: 550012,
-			script_pubkey,
-		};
-		Transaction {
-			version: 2,
-			lock_time: PackedLockTime::ZERO,
-			output: vec![output],
-			input: vec![],
-		}
+		get_sample_input_tx_intern(get_sample_pubkey(12), 550012)
+	}
+
+	fn get_sample_input_tx_3() -> Transaction {
+		get_sample_input_tx_intern(get_sample_pubkey(13), 550013)
+	}
+
+	fn get_sample_tx_add_input_intern(serial_id: u64, channel_id: ChannelId, prevtx: TransactionU16LenLimited) -> TxAddInput {
+		TxAddInput { channel_id, serial_id, prevtx, prevtx_out: 0, sequence: 305419896 }
 	}
 
 	fn get_sample_tx_add_input(serial_id: u64, channel_id: ChannelId) -> TxAddInput {
-		let prevtx = TransactionU16LenLimited::new(get_sample_input_tx()).unwrap();
-		TxAddInput {
-			channel_id,
-			serial_id,
-			prevtx,
-			prevtx_out: 0,
-			sequence: 305419896,
-		}
+		get_sample_tx_add_input_intern(serial_id, channel_id, TransactionU16LenLimited::new(get_sample_input_tx()).unwrap())
 	}
 
 	fn get_sample_tx_add_input_2(serial_id: u64, channel_id: ChannelId) -> TxAddInput {
-		let prevtx = TransactionU16LenLimited::new(get_sample_input_tx_2()).unwrap();
-		TxAddInput {
-			channel_id,
-			serial_id,
-			prevtx,
-			prevtx_out: 0,
-			sequence: 305419896,
-		}
+		get_sample_tx_add_input_intern(serial_id, channel_id, TransactionU16LenLimited::new(get_sample_input_tx_2()).unwrap())
+	}
+
+	fn get_sample_tx_add_input_3(serial_id: u64, channel_id: ChannelId) -> TxAddInput {
+		get_sample_tx_add_input_intern(serial_id, channel_id, TransactionU16LenLimited::new(get_sample_input_tx_3()).unwrap())
 	}
 
 	fn get_sample_tx_output() -> TxOut {
@@ -761,6 +751,65 @@ mod tests {
 						// TODO here it should be 2!!!
 						Some(ExTx::new(1, 1)),
 					),
+				},
+			],
+		);
+	}
+
+	#[test]
+	fn test_interact_tx_noni_uj_complete() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddO(get_sample_tx_add_output(123004, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::NegComp, None, Some(ExTx::new(1, 1))),
+				},
+			],
+		);
+	}
+
+	#[test]
+	#[allow(non_snake_case)]
+	fn test_interact_tx_init_IuOjj_complete() {
+		let channel_id = get_sample_channel_id();
+		let inputs = vec![(get_sample_tx_input(), get_sample_input_tx())];
+		let outputs = vec![get_sample_tx_output()];
+		run_interactive_tx(
+			channel_id,
+			true,
+			inputs,
+			outputs,
+			ExInvRes::ok(ExSt::LocalCh, Some(ExMsg::AddI), None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddO(get_sample_tx_add_output_2(123001, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalCh, Some(ExMsg::AddO), None),
+				},
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input_2(123003, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input_3(123005, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::NegComp, None, Some(ExTx::new(3, 2))),
 				},
 			],
 		);
