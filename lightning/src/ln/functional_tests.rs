@@ -442,8 +442,20 @@ fn test_splice_in_simple() {
 	let splice_created_message = get_event_msg!(nodes[i], MessageSendEvent::SendSpliceCreated, nodes[a].node.get_our_node_id());
 	let _res = nodes[a].node.handle_splice_created(&nodes[i].node.get_our_node_id(), &splice_created_message);
 
-	let splice_signed_message = get_event_msg!(nodes[a], MessageSendEvent::SendSpliceSigned, nodes[i].node.get_our_node_id());
-	let _res = nodes[i].node.handle_splice_signed(&nodes[a].node.get_our_node_id(), &splice_signed_message);
+	let tx_complete_message = get_event_msg!(nodes[a], MessageSendEvent::SendTxComplete, nodes[i].node.get_our_node_id());
+	let _res = nodes[i].node.handle_tx_complete(&nodes[a].node.get_our_node_id(), &tx_complete_message);
+
+	let splice_comm_signed_message = get_event_msg!(nodes[i], MessageSendEvent::SendSpliceCommSigned, nodes[a].node.get_our_node_id());
+	let _res = nodes[a].node.handle_splice_comm_signed(&nodes[i].node.get_our_node_id(), &splice_comm_signed_message);
+
+	let splice_comm_ack_message = get_event_msg!(nodes[a], MessageSendEvent::SendSpliceCommAck, nodes[i].node.get_our_node_id());
+	let _res = nodes[i].node.handle_splice_comm_ack(&nodes[a].node.get_our_node_id(), &splice_comm_ack_message);
+
+	let splice_signed_message = get_event_msg!(nodes[i], MessageSendEvent::SendSpliceSigned, nodes[a].node.get_our_node_id());
+	let _res = nodes[a].node.handle_splice_signed(&nodes[i].node.get_our_node_id(), &splice_signed_message);
+
+	let splice_signed_ack_message = get_event_msg!(nodes[a], MessageSendEvent::SendSpliceSignedAck, nodes[i].node.get_our_node_id());
+	let _res = nodes[i].node.handle_splice_signed_ack(&nodes[a].node.get_our_node_id(), &splice_signed_ack_message);
 
 	// Check that signed splice funding transaction has been broadcasted
 	assert_eq!(chanmon_cfgs[i].tx_broadcaster.txn_broadcasted.lock().unwrap().len(), 2);
@@ -456,7 +468,7 @@ fn test_splice_in_simple() {
 		"0000000000010174c52ab4f11296d62b66a6dba9513b04a3e7fb5a09a30cee22fce7294ab55b7e0000000000fdffffff01c0d401000000000022002034c0cc0ad0dd5fe61dcf7ef58f995e3d34f8dbd24aa2a6fae68fefe102bf025c0400473044022021caaa9ce61a6f7213b1c5a35f5d34cf57ce2c38b9e38edde90d7a159ac77f42022037f1dce5947b36f5ae127bf174b9cff95fa9043ea581a9d47c25efab3b6c549301473044022019f6ee98b4a1fdbcbca241151483185c2a67d4d2ececfd59acc570df885ee3a80220508e4aa3a45ec859da0e3c112b4754142babe5435900267fe305d381f48a6fbb014752210307a78def56cba9fc4db22a25928181de538ee59ba1a475ae113af7790acd0db32103c21e841cbc0b48197d060c71e116c185fa0ac281b7d0aa5924f535154437ca3b52ae00000000");
 
 	check_added_monitors!(nodes[i], 1);
-	check_added_monitors!(nodes[a], 1);
+	check_added_monitors!(nodes[a], 1); // TODO
 
 	confirm_transaction(&nodes[i], &broadcasted_splice_tx);
 	let channel_ready_message = get_event_msg!(nodes[i], MessageSendEvent::SendChannelReady, nodes[a].node.get_our_node_id());
