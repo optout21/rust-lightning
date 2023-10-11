@@ -46,7 +46,7 @@ use alloc::rc::Rc;
 use crate::sync::{Arc, Mutex, LockTestExt, RwLock};
 use core::mem;
 use core::iter::repeat;
-use bitcoin::{PackedLockTime, TxIn, TxMerkleNode};
+use bitcoin::{PackedLockTime, TxIn, TxMerkleNode, Script, Sequence, Witness, WPubkeyHash};
 
 pub const CHAN_CONFIRM_DEPTH: u32 = 10;
 
@@ -1017,6 +1017,27 @@ pub fn create_coinbase_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
  -> (ChannelId, Transaction, OutPoint)
 {
 	internal_create_funding_transaction(node, expected_counterparty_node_id, expected_chan_value, expected_user_chan_id, true)
+}
+
+pub fn create_dual_funding_utxo_with_prev_tx<'a, 'b, 'c>(
+	node: &Node<'a, 'b, 'c>, value_satoshis: u64,
+) -> (TxIn, Transaction) {
+	let chan_id = *node.network_chan_count.borrow();
+
+	let tx = Transaction { version: chan_id as i32, lock_time: PackedLockTime::ZERO, input: vec![],
+		output: vec![TxOut {
+			value: value_satoshis, script_pubkey: Script::new_v0_p2wpkh(&WPubkeyHash::all_zeros()),
+		}]};
+	let funding_input = TxIn {
+		previous_output: OutPoint {
+			txid: tx.txid(),
+			index: 0,
+		}.into_bitcoin_outpoint(),
+		script_sig: Script::new(),
+		sequence: Sequence::ZERO,
+		witness: Witness::new(),
+	};
+	(funding_input, tx)
 }
 
 fn internal_create_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,

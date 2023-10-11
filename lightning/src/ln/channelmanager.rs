@@ -10653,6 +10653,7 @@ mod tests {
 	use bitcoin::hashes::sha256::Hash as Sha256;
 	use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 	use core::sync::atomic::Ordering;
+	use crate::chain::chaininterface::ConfirmationTarget;
 	use crate::events::{Event, HTLCDestination, MessageSendEvent, MessageSendEventsProvider, ClosureReason};
 	use crate::ln::{PaymentPreimage, PaymentHash, PaymentSecret};
 	use crate::ln::ChannelId;
@@ -11807,7 +11808,38 @@ mod tests {
 	}
 
 	// Dual-funding: V2 Channel Establishment Tests
-	// TODO(dual_funding): Complete these.
+	#[test]
+	fn test_v2_channel_establishment_only_initiator_contributes() {
+		let chanmon_cfgs = create_chanmon_cfgs(2);
+		let node_cfgs = create_node_cfgs(2, &chanmon_cfgs);
+		let node_chanmgrs = create_node_chanmgrs(2, &node_cfgs, &[None, None]);
+		let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
+
+		// Create a funding input for the new channel along with its previous transaction.
+		let funding_inputs = vec![create_dual_funding_utxo_with_prev_tx(&nodes[0], 100_000)];
+
+		nodes[0].node.create_dual_funded_channel(
+			nodes[1].node.get_our_node_id(), 50_000, funding_inputs, Some(ConfirmationTarget::Normal), 42,
+			None,
+		).unwrap();
+		let open_channel_v2_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannelV2, nodes[1].node.get_our_node_id());
+
+		assert_eq!(nodes[0].node.list_channels().len(), 1);
+
+		nodes[1].node.handle_open_channel_v2(&nodes[0].node.get_our_node_id(), &open_channel_v2_msg);
+		let accept_channel_v2_msg = get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannelV2, nodes[0].node.get_our_node_id());
+
+		nodes[0].node.handle_accept_channel_v2(&nodes[1].node.get_our_node_id(), &accept_channel_v2_msg);
+		let tx_add_input_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddInput, nodes[1].node.get_our_node_id());
+
+		nodes[1].node.handle_tx_add_input(&nodes[0].node.get_our_node_id(), &tx_add_input_msg);
+		let tx_complete_msg = get_event_msg!(nodes[1], MessageSendEvent::SendTxComplete, nodes[0].node.get_our_node_id());
+
+		// TODO(dual_funding): Add the funding output
+
+		nodes[0].node.handle_tx_complete(&nodes[1].node.get_our_node_id(), &tx_complete_msg);
+		let tx_complete_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxComplete, nodes[1].node.get_our_node_id());
+	}
 }
 
 #[cfg(ldk_bench)]
