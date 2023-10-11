@@ -11827,8 +11827,10 @@ mod tests {
 		assert_eq!(nodes[0].node.list_channels().len(), 1);
 
 		nodes[1].node.handle_open_channel_v2(&nodes[0].node.get_our_node_id(), &open_channel_v2_msg);
-		get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannelV2, nodes[0].node.get_our_node_id());
-		// TODO(dual_funding): Complete negotiation
+		let accept_channel_v2_msg = get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannelV2, nodes[0].node.get_our_node_id());
+
+		nodes[0].node.handle_accept_channel_v2(&nodes[1].node.get_our_node_id(), &accept_channel_v2_msg);
+		let tx_add_input = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddInput, nodes[0].node.get_our_node_id());
 	}
 }
 
