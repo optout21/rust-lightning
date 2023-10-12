@@ -764,6 +764,21 @@ pub struct UserConfig {
 	///
 	/// [`ChannelManager`]: crate::ln::channelmanager::ChannelManager
 	pub accept_mpp_keysend: bool,
+	/// If this is set to true, regardless of `manually_accept_inbound_channels`'s value, the user
+	/// needs to manually accept inbound requests to open a new dual-funded channel and provide any
+	/// UTXOs they'd like to contribute to the funding transaction.
+	///
+	/// When set to true, [`Event::OpenChannelV2Request`] will be triggered once a request to open a
+	/// new inbound dual-funded channel is received through a [`msgs::OpenChannelV2`] message. In that
+	/// case, a [`msgs::AcceptChannelV2`] message will not be sent back to the counterparty node unless
+	/// the user explicitly chooses to accept the request.
+	///
+	/// Default value: false.
+	///
+	/// [`Event::OpenChannelV2Request`]: crate::events::Event::OpenChannelV2Request
+	/// [`msgs::OpenChannelV2`]: crate::ln::msgs::OpenChannelV2
+	/// [`msgs::AcceptChannelV2`]: crate::ln::msgs::AcceptChannelV2
+	pub contribute_to_dual_funded_channels: bool,
 }
 
 impl Default for UserConfig {
@@ -777,6 +792,7 @@ impl Default for UserConfig {
 			manually_accept_inbound_channels: false,
 			accept_intercept_htlcs: false,
 			accept_mpp_keysend: false,
+			contribute_to_dual_funded_channels: false,
 		}
 	}
 }

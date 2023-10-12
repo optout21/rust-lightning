@@ -22,7 +22,6 @@ mod tests {
 	use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 	use bitcoin::{PackedLockTime, Script, Sequence, Transaction, TxIn, TxOut, Witness};
 	use crate::util::chacha20::ChaCha20;
-	use core::ops::Deref;
 
 	// Fixtures
 
@@ -182,12 +181,12 @@ mod tests {
 
 	// TODO return proper error
 	impl InvHM {
-		fn do_invoke<ES: Deref>(
+		//fn do_invoke<ES: Deref>(
+		fn do_invoke(
 			&self,
-			interact_tx: &mut InteractiveTxConstructor<ES>,
+			interact_tx: &mut InteractiveTxConstructor,
 		) -> Result<(Option<InteractiveTxMessageSend>, Option<Transaction>), ()>
-		where
-			ES::Target: EntropySource,
+		// where ES::Target: EntropySource,
 		{
 			match self {
 				InvHM::AddI(txai) => {
@@ -360,7 +359,7 @@ mod tests {
 	) {
 		let entropy_source = TestEntropySource::new();
 		let (mut interact, msg) = InteractiveTxConstructor::new(
-			&entropy_source,
+			&&entropy_source,
 			channel_id,
 			FEERATE_FLOOR_SATS_PER_KW,
 			is_initiator,

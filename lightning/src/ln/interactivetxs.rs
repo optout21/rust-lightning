@@ -13,13 +13,14 @@ use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::policy::MAX_STANDARD_TX_WEIGHT;
 use bitcoin::{OutPoint, Sequence, Transaction, TxIn, TxOut, PackedLockTime};
 
+use crate::io_extras::sink;
 use crate::ln::channel::TOTAL_BITCOIN_SUPPLY_SATOSHIS;
 use crate::ln::{ChannelId, msgs};
 use crate::ln::msgs::SerialId;
+use crate::prelude::*;
 use crate::sign::EntropySource;
 
 use core::ops::Deref;
-use std::io::sink;
 use bitcoin::consensus::Encodable;
 use crate::events::bump_transaction::{BASE_INPUT_WEIGHT, EMPTY_SCRIPT_SIG_WEIGHT};
 use crate::util::ser::TransactionU16LenLimited;
@@ -331,17 +332,10 @@ impl NegotiationContext {
 		).sum();
 		let counterparty_weight_contributed = counterparty_output_weight_contributed +
 			counterparty_inputs_contributed.clone().count() as u64 * INPUT_WEIGHT;
-		let (counterparty_fees_contributed, mut required_counterparty_contribution_fee) = if counterparty_weight_contributed == 0 {
-			(0, 0)
-		} else {
-			debug_assert!(counterparty_weight_contributed != 0);
-			let counterparty_fees_contributed =
-				counterparty_inputs_value.saturating_sub(counterparty_outputs_value);
-			let required_counterparty_contribution_fee =
-				self.feerate_sat_per_kw as u64 * 1000 / counterparty_weight_contributed;
-			(counterparty_fees_contributed, required_counterparty_contribution_fee)
-		};
-
+		let counterparty_fees_contributed =
+			counterparty_inputs_value.saturating_sub(counterparty_outputs_value);
+		let mut required_counterparty_contribution_fee =
+			self.feerate_sat_per_kw as u64 * counterparty_weight_contributed / 1000;
 		if !self.holder_is_initiator {
 		    // if is the non-initiator:
 		    // 	- the initiator's fees do not cover the common fields (version, segwit marker + flag,
@@ -551,16 +545,12 @@ impl StateMachine {
 	]);
 }
 
-pub struct InteractiveTxConstructor<ES: Deref>
-	where
-		ES::Target: EntropySource,
-{
+pub struct InteractiveTxConstructor {
 	state_machine: StateMachine,
 	channel_id: ChannelId,
 	is_initiator: bool,
-	entropy_source: ES,
-	inputs_to_contribute: Vec<(TxIn, Transaction)>,
-	outputs_to_contribute: Vec<TxOut>,
+	inputs_to_contribute: Vec<(SerialId, TxIn, Transaction)>,
+	outputs_to_contribute: Vec<(SerialId, TxOut)>,
 }
 
 pub enum InteractiveTxMessageSend {
@@ -586,24 +576,23 @@ macro_rules! do_state_transition {
 }
 
 // TODO: Check spec to see if it dictates what needs to happen if a node receives an unexpected message.
-impl<ES: Deref> InteractiveTxConstructor<ES>
-	where
-		ES::Target: EntropySource,
-{
-	// TODO: channel_id should be ChannelId
-	pub fn new(
-		entropy_source: ES, channel_id: ChannelId, feerate_sat_per_kw: u32, is_initiator: bool,
+impl InteractiveTxConstructor {
+	pub fn new<ES: Deref>(
+		entropy_source: &ES, channel_id: ChannelId, feerate_sat_per_kw: u32, is_initiator: bool,
 		tx_locktime: PackedLockTime, inputs_to_contribute: Vec<(TxIn, Transaction)>,
 		outputs_to_contribute: Vec<TxOut>,
-	) -> (Self, Option<InteractiveTxMessageSend>) {
+	) -> (Self, Option<InteractiveTxMessageSend>) where ES::Target: EntropySource {
 		let state_machine = StateMachine::new(feerate_sat_per_kw, is_initiator, tx_locktime);
 		let mut constructor = Self {
 			state_machine,
 			channel_id,
 			is_initiator,
-			entropy_source,
-			inputs_to_contribute,
-			outputs_to_contribute,
+			inputs_to_contribute: inputs_to_contribute.into_iter().map(|(txin, tx)| {
+				(Self::generate_local_serial_id(entropy_source, is_initiator), txin, tx)
+			}).collect(),
+			outputs_to_contribute: outputs_to_contribute.into_iter().map(|txout| {
+				(Self::generate_local_serial_id(entropy_source, is_initiator), txout)
+			}).collect(),
 		};
 		let message_send = if is_initiator {
 			match constructor.do_local_state_transition() {
@@ -619,12 +608,14 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 		(constructor, message_send)
 	}
 
-	fn generate_local_serial_id(&self) -> SerialId {
-		let rand_bytes = self.entropy_source.get_secure_random_bytes();
+	fn generate_local_serial_id<ES: Deref>(entropy_source: &ES, is_initiator: bool) -> SerialId
+		where ES::Target: EntropySource,
+	{
+		let rand_bytes = entropy_source.get_secure_random_bytes();
 		let mut serial_id_bytes = [0u8; 8];
 		serial_id_bytes.copy_from_slice(&rand_bytes[..8]);
 		let mut serial_id = u64::from_be_bytes(serial_id_bytes);
-		if serial_id.is_valid_for_initiator() != self.is_initiator {
+		if serial_id.is_valid_for_initiator() != is_initiator {
 			serial_id ^= 1;
 		}
 		serial_id
@@ -632,20 +623,20 @@ impl<ES: Deref> InteractiveTxConstructor<ES>
 
 	// TODO Should return error
 	fn do_local_state_transition(&mut self) -> Result<InteractiveTxMessageSend, ()> {
-		if let Some((input, prev_tx)) = self.inputs_to_contribute.pop() {
+		if let Some((serial_id, input, prev_tx)) = self.inputs_to_contribute.pop() {
 			let msg = msgs::TxAddInput {
 				channel_id: self.channel_id,
-				serial_id: self.generate_local_serial_id(),
+				serial_id,
 				prevtx: TransactionU16LenLimited(prev_tx),
 				prevtx_out: input.previous_output.vout,
 				sequence: input.sequence.to_consensus_u32(),
 			};
 			let _ = do_state_transition!(self, local_tx_add_input, &msg)?;
 			Ok(InteractiveTxMessageSend::TxAddInput(msg))
-		} else if let Some(output) = self.outputs_to_contribute.pop() {
+		} else if let Some((serial_id, output)) = self.outputs_to_contribute.pop() {
 			let msg = msgs::TxAddOutput {
 				channel_id: self.channel_id,
-				serial_id: self.generate_local_serial_id(),
+				serial_id,
 				sats: output.value,
 				script: output.script_pubkey,
 			};

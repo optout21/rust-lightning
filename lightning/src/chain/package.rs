@@ -551,6 +551,32 @@ impl PackageSolvingData {
 			_ => { mem::discriminant(self) == mem::discriminant(&input) }
 		}
 	}
+	fn as_tx_input(&self, previous_output: BitcoinOutPoint) -> TxIn {
+		let sequence = match self {
+			PackageSolvingData::RevokedOutput(_) => Sequence::ENABLE_RBF_NO_LOCKTIME,
+			PackageSolvingData::RevokedHTLCOutput(_) => Sequence::ENABLE_RBF_NO_LOCKTIME,
+			PackageSolvingData::CounterpartyOfferedHTLCOutput(outp) => if outp.channel_type_features.supports_anchors_zero_fee_htlc_tx() {
+				Sequence::from_consensus(1)
+			} else {
+				Sequence::ENABLE_RBF_NO_LOCKTIME
+			},
+			PackageSolvingData::CounterpartyReceivedHTLCOutput(outp) => if outp.channel_type_features.supports_anchors_zero_fee_htlc_tx() {
+				Sequence::from_consensus(1)
+			} else {
+				Sequence::ENABLE_RBF_NO_LOCKTIME
+			},
+			_ => {
+				debug_assert!(false, "This should not be reachable by 'untractable' or 'malleable with external funding' packages");
+				Sequence::ENABLE_RBF_NO_LOCKTIME
+			},
+		};
+		TxIn {
+			previous_output,
+			script_sig: Script::new(),
+			sequence,
+			witness: Witness::new(),
+		}
+	}
 	fn finalize_input<Signer: WriteableEcdsaChannelSigner>(&self, bumped_tx: &mut Transaction, i: usize, onchain_handler: &mut OnchainTxHandler<Signer>) -> bool {
 		match self {
 			PackageSolvingData::RevokedOutput(ref outp) => {
@@ -895,13 +921,8 @@ impl PackageTemplate {
 				value,
 			}],
 		};
-		for (outpoint, _) in self.inputs.iter() {
-			bumped_tx.input.push(TxIn {
-				previous_output: *outpoint,
-				script_sig: Script::new(),
-				sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-				witness: Witness::new(),
-			});
+		for (outpoint, outp) in self.inputs.iter() {
+			bumped_tx.input.push(outp.as_tx_input(*outpoint));
 		}
 		for (i, (outpoint, out)) in self.inputs.iter().enumerate() {
 			log_debug!(logger, "Adding claiming input for outpoint {}:{}", outpoint.txid, outpoint.vout);
@@ -976,14 +997,23 @@ impl PackageTemplate {
 	) -> u32 where F::Target: FeeEstimator {
 		let feerate_estimate = fee_estimator.bounded_sat_per_1000_weight(conf_target);
 		if self.feerate_previous != 0 {
-			// If old feerate inferior to actual one given back by Fee Estimator, use it to compute new fee...
+			// Use the new fee estimate if it's higher than the one previously used.
 			if feerate_estimate as u64 > self.feerate_previous {
 				feerate_estimate
 			} else if !force_feerate_bump {
 				self.feerate_previous.try_into().unwrap_or(u32::max_value())
 			} else {
-				// ...else just increase the previous feerate by 25% (because that's a nice number)
-				(self.feerate_previous + (self.feerate_previous / 4)).try_into().unwrap_or(u32::max_value())
+				// Our fee estimate has decreased, but our transaction remains unconfirmed after
+				// using our previous fee estimate. This may point to an unreliable fee estimator,
+				// so we choose to bump our previous feerate by 25%, making sure we don't use a
+				// lower feerate or overpay by a large margin by limiting it to 5x the new fee
+				// estimate.
+				let previous_feerate = self.feerate_previous.try_into().unwrap_or(u32::max_value());
+				let mut new_feerate = previous_feerate.saturating_add(previous_feerate / 4);
+				if new_feerate > feerate_estimate * 5 {
+					new_feerate = cmp::max(feerate_estimate * 5, previous_feerate);
+				}
+				new_feerate
 			}
 		} else {
 			feerate_estimate
