@@ -11809,7 +11809,7 @@ mod tests {
 
 	// Dual-funding: V2 Channel Establishment Tests
 	#[test]
-	fn test_v2_channel_establishment() {
+	fn test_v2_channel_establishment_only_initiator_contributes() {
 		let chanmon_cfgs = create_chanmon_cfgs(2);
 		let node_cfgs = create_node_cfgs(2, &chanmon_cfgs);
 		let node_chanmgrs = create_node_chanmgrs(2, &node_cfgs, &[None, None]);
@@ -11830,7 +11830,15 @@ mod tests {
 		let accept_channel_v2_msg = get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannelV2, nodes[0].node.get_our_node_id());
 
 		nodes[0].node.handle_accept_channel_v2(&nodes[1].node.get_our_node_id(), &accept_channel_v2_msg);
-		let tx_add_input = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddInput, nodes[0].node.get_our_node_id());
+		let tx_add_input_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxAddInput, nodes[1].node.get_our_node_id());
+
+		nodes[1].node.handle_tx_add_input(&nodes[0].node.get_our_node_id(), &tx_add_input_msg);
+		let tx_complete_msg = get_event_msg!(nodes[1], MessageSendEvent::SendTxComplete, nodes[0].node.get_our_node_id());
+
+		// TODO(dual_funding): Add the funding output
+
+		nodes[0].node.handle_tx_complete(&nodes[1].node.get_our_node_id(), &tx_complete_msg);
+		let tx_complete_msg = get_event_msg!(&nodes[0], MessageSendEvent::SendTxComplete, nodes[1].node.get_our_node_id());
 	}
 }
 
