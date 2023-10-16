@@ -393,7 +393,7 @@ macro_rules! define_state {
 	($state: ident, $inner: ident, $doc: expr) => {
 		#[doc = $doc]
 		#[derive(Debug)]
-		struct $state($inner);
+		pub(crate) struct $state($inner);
 		impl State for $state {}
 	};
 }
@@ -470,7 +470,7 @@ define_state_transitions!(TX_COMPLETE, LocalTxComplete);
 define_state_transitions!(TX_COMPLETE, RemoteTxComplete);
 
 #[derive(Debug)]
-enum StateMachine {
+pub(crate) enum StateMachine {
 	Indeterminate,
 	LocalChange(LocalChange),
 	RemoteChange(RemoteChange),
@@ -696,6 +696,9 @@ impl InteractiveTxConstructor {
 			}
 		}
 	}
+
+	#[cfg(test)]
+	pub(crate) fn get_state_machine(&self) -> &StateMachine { &self.state_machine }
 }
 
 #[cfg(test)]

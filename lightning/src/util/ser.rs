@@ -1392,6 +1392,11 @@ impl TransactionU16LenLimited {
 	pub fn into_transaction(self) -> Transaction {
 		self.0
 	}
+
+	/// Access inner transaction, as reference
+	pub(crate) fn inner(&self) -> &Transaction {
+		&self.0
+	}
 }
 
 impl Writeable for TransactionU16LenLimited {
