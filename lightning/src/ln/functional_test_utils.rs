@@ -15,7 +15,7 @@ use crate::sign::EntropySource;
 use crate::chain::channelmonitor::ChannelMonitor;
 use crate::chain::transaction::OutPoint;
 use crate::events::{ClaimedHTLC, ClosureReason, Event, HTLCDestination, MessageSendEvent, MessageSendEventsProvider, PathFailure, PaymentPurpose, PaymentFailureReason};
-use crate::events::bump_transaction::{BumpTransactionEventHandler, Wallet, WalletSource};
+use crate::events::bump_transaction::{BumpTransactionEvent, BumpTransactionEventHandler, Wallet, WalletSource};
 use crate::ln::{ChannelId, PaymentPreimage, PaymentHash, PaymentSecret};
 use crate::ln::channelmanager::{AChannelManager, ChainParameters, ChannelManager, ChannelManagerReadArgs, RAACommitmentOrder, PaymentSendFailure, RecipientOnionFields, PaymentId, MIN_CLTV_EXPIRY_DELTA};
 use crate::routing::gossip::{P2PGossipSync, NetworkGraph, NetworkUpdate};
@@ -46,7 +46,7 @@ use alloc::rc::Rc;
 use crate::sync::{Arc, Mutex, LockTestExt, RwLock};
 use core::mem;
 use core::iter::repeat;
-use bitcoin::{PackedLockTime, TxIn, TxMerkleNode};
+use bitcoin::{PackedLockTime, TxIn, TxMerkleNode, Script, Sequence, Witness, WPubkeyHash};
 
 pub const CHAN_CONFIRM_DEPTH: u32 = 10;
 
@@ -422,6 +422,10 @@ pub struct Node<'chan_man, 'node_cfg: 'chan_man, 'chan_mon_cfg: 'node_cfg> {
 		&'chan_mon_cfg test_utils::TestLogger,
 	>,
 }
+#[cfg(feature = "std")]
+impl<'a, 'b, 'c> std::panic::UnwindSafe for Node<'a, 'b, 'c> {}
+#[cfg(feature = "std")]
+impl<'a, 'b, 'c> std::panic::RefUnwindSafe for Node<'a, 'b, 'c> {}
 impl<'a, 'b, 'c> Node<'a, 'b, 'c> {
 	pub fn best_block_hash(&self) -> BlockHash {
 		self.blocks.lock().unwrap().last().unwrap().0.block_hash()
@@ -578,7 +582,7 @@ impl<'a, 'b, 'c> Drop for Node<'a, 'b, 'c> {
 			let chain_source = test_utils::TestChainSource::new(Network::Testnet);
 			let chain_monitor = test_utils::TestChainMonitor::new(Some(&chain_source), &broadcaster, &self.logger, &feeest, &persister, &self.keys_manager);
 			for deserialized_monitor in deserialized_monitors.drain(..) {
-				if chain_monitor.watch_channel(deserialized_monitor.get_funding_txo().0, deserialized_monitor) != ChannelMonitorUpdateStatus::Completed {
+				if chain_monitor.watch_channel(deserialized_monitor.get_funding_txo().0, deserialized_monitor) != Ok(ChannelMonitorUpdateStatus::Completed) {
 					panic!();
 				}
 			}
@@ -977,7 +981,7 @@ pub fn _reload_node<'a, 'b, 'c>(node: &'a Node<'a, 'b, 'c>, default_config: User
 
 	for monitor in monitors_read.drain(..) {
 		assert_eq!(node.chain_monitor.watch_channel(monitor.get_funding_txo().0, monitor),
-			ChannelMonitorUpdateStatus::Completed);
+			Ok(ChannelMonitorUpdateStatus::Completed));
 		check_added_monitors!(node, 1);
 	}
 
@@ -1013,6 +1017,27 @@ pub fn create_coinbase_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
  -> (ChannelId, Transaction, OutPoint)
 {
 	internal_create_funding_transaction(node, expected_counterparty_node_id, expected_chan_value, expected_user_chan_id, true)
+}
+
+pub fn create_dual_funding_utxo_with_prev_tx<'a, 'b, 'c>(
+	node: &Node<'a, 'b, 'c>, value_satoshis: u64,
+) -> (TxIn, Transaction) {
+	let chan_id = *node.network_chan_count.borrow();
+
+	let tx = Transaction { version: chan_id as i32, lock_time: PackedLockTime::ZERO, input: vec![],
+		output: vec![TxOut {
+			value: value_satoshis, script_pubkey: Script::new_v0_p2wpkh(&WPubkeyHash::all_zeros()),
+		}]};
+	let funding_input = TxIn {
+		previous_output: OutPoint {
+			txid: tx.txid(),
+			index: 0,
+		}.into_bitcoin_outpoint(),
+		script_sig: Script::new(),
+		sequence: Sequence::ZERO,
+		witness: Witness::new(),
+	};
+	(funding_input, tx)
 }
 
 fn internal_create_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
@@ -1469,12 +1494,12 @@ pub fn check_closed_event(node: &Node, events_count: usize, expected_reason: Clo
 	let events = node.node.get_and_clear_pending_events();
 	assert_eq!(events.len(), events_count, "{:?}", events);
 	let mut issues_discard_funding = false;
-	for (idx, event) in events.into_iter().enumerate() {
+	for event in events {
 		match event {
-			Event::ChannelClosed { ref reason, counterparty_node_id, 
+			Event::ChannelClosed { ref reason, counterparty_node_id,
 				channel_capacity_sats, .. } => {
 				assert_eq!(*reason, expected_reason);
-				assert_eq!(counterparty_node_id.unwrap(), expected_counterparty_node_ids[idx]);
+				assert!(expected_counterparty_node_ids.iter().any(|id| id == &counterparty_node_id.unwrap()));
 				assert_eq!(channel_capacity_sats.unwrap(), expected_channel_capacity);
 			},
 			Event::DiscardFunding { .. } => {
@@ -1495,8 +1520,23 @@ macro_rules! check_closed_event {
 		check_closed_event!($node, $events, $reason, false, $counterparty_node_ids, $channel_capacity);
 	};
 	($node: expr, $events: expr, $reason: expr, $is_check_discard_funding: expr, $counterparty_node_ids: expr, $channel_capacity: expr) => {
-		$crate::ln::functional_test_utils::check_closed_event(&$node, $events, $reason, 
+		$crate::ln::functional_test_utils::check_closed_event(&$node, $events, $reason,
 			$is_check_discard_funding, &$counterparty_node_ids, $channel_capacity);
+	}
+}
+
+pub fn handle_bump_htlc_event(node: &Node, count: usize) {
+	let events = node.chain_monitor.chain_monitor.get_and_clear_pending_events();
+	assert_eq!(events.len(), count);
+	for event in events {
+		match event {
+			Event::BumpTransaction(bump_event) => {
+				if let BumpTransactionEvent::HTLCResolution { .. } = &bump_event {}
+				else { panic!(); }
+				node.bump_tx_handler.handle_event(&bump_event);
+			},
+			_ => panic!(),
+		}
 	}
 }
 
@@ -1854,7 +1894,7 @@ pub fn get_route(send_node: &Node, route_params: &RouteParameters) -> Result<Rou
 	router::get_route(
 		&send_node.node.get_our_node_id(), route_params, &send_node.network_graph.read_only(),
 		Some(&send_node.node.list_usable_channels().iter().collect::<Vec<_>>()),
-		send_node.logger, &scorer, &(), &random_seed_bytes
+		send_node.logger, &scorer, &Default::default(), &random_seed_bytes
 	)
 }
 
@@ -1878,7 +1918,11 @@ macro_rules! get_route_and_payment_hash {
 		$crate::get_route_and_payment_hash!($send_node, $recv_node, payment_params, $recv_value)
 	}};
 	($send_node: expr, $recv_node: expr, $payment_params: expr, $recv_value: expr) => {{
-		let route_params = $crate::routing::router::RouteParameters::from_payment_params_and_value($payment_params, $recv_value);
+		$crate::get_route_and_payment_hash!($send_node, $recv_node, $payment_params, $recv_value, None)
+	}};
+	($send_node: expr, $recv_node: expr, $payment_params: expr, $recv_value: expr, $max_total_routing_fee_msat: expr) => {{
+		let mut route_params = $crate::routing::router::RouteParameters::from_payment_params_and_value($payment_params, $recv_value);
+		route_params.max_total_routing_fee_msat = $max_total_routing_fee_msat;
 		let (payment_preimage, payment_hash, payment_secret) =
 			$crate::ln::functional_test_utils::get_payment_preimage_hash(&$recv_node, Some($recv_value), None);
 		let route = $crate::ln::functional_test_utils::get_route(&$send_node, &route_params);
@@ -2506,7 +2550,7 @@ pub fn route_over_limit<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_rou
 	let keys_manager = test_utils::TestKeysInterface::new(&seed, Network::Testnet);
 	let random_seed_bytes = keys_manager.get_secure_random_bytes();
 	let route = router::get_route(&origin_node.node.get_our_node_id(), &route_params, &network_graph,
-		None, origin_node.logger, &scorer, &(), &random_seed_bytes).unwrap();
+		None, origin_node.logger, &scorer, &Default::default(), &random_seed_bytes).unwrap();
 	assert_eq!(route.paths.len(), 1);
 	assert_eq!(route.paths[0].hops.len(), expected_route.len());
 	for (node, hop) in expected_route.iter().zip(route.paths[0].hops.iter()) {
@@ -2772,7 +2816,8 @@ pub fn create_network<'a, 'b: 'a, 'c: 'b>(node_count: usize, cfgs: &'b Vec<NodeC
 }
 
 // Note that the following only works for CLTV values up to 128
-pub const ACCEPTED_HTLC_SCRIPT_WEIGHT: usize = 137; //Here we have a diff due to HTLC CLTV expiry being < 2^15 in test
+pub const ACCEPTED_HTLC_SCRIPT_WEIGHT: usize = 137; // Here we have a diff due to HTLC CLTV expiry being < 2^15 in test
+pub const ACCEPTED_HTLC_SCRIPT_WEIGHT_ANCHORS: usize = 140; // Here we have a diff due to HTLC CLTV expiry being < 2^15 in test
 
 #[derive(PartialEq)]
 pub enum HTLCType { NONE, TIMEOUT, SUCCESS }
@@ -3257,4 +3302,77 @@ pub fn reconnect_nodes<'a, 'b, 'c, 'd>(args: ReconnectArgs<'a, 'b, 'c, 'd>) {
 			assert!(chan_msgs.2.is_none());
 		}
 	}
+}
+
+/// Initiates channel opening and creates a single batch funding transaction.
+/// This will go through the open_channel / accept_channel flow, and return the batch funding
+/// transaction with corresponding funding_created messages.
+pub fn create_batch_channel_funding<'a, 'b, 'c>(
+	funding_node: &Node<'a, 'b, 'c>,
+	params: &[(&Node<'a, 'b, 'c>, u64, u64, u128, Option<UserConfig>)],
+) -> (Transaction, Vec<msgs::FundingCreated>) {
+	let mut tx_outs = Vec::new();
+	let mut temp_chan_ids = Vec::new();
+	let mut funding_created_msgs = Vec::new();
+
+	for (other_node, channel_value_satoshis, push_msat, user_channel_id, override_config) in params {
+		// Initialize channel opening.
+		let temp_chan_id = funding_node.node.create_channel(
+			other_node.node.get_our_node_id(), *channel_value_satoshis, *push_msat, *user_channel_id,
+			*override_config,
+		).unwrap();
+		let open_channel_msg = get_event_msg!(funding_node, MessageSendEvent::SendOpenChannel, other_node.node.get_our_node_id());
+		other_node.node.handle_open_channel(&funding_node.node.get_our_node_id(), &open_channel_msg);
+		let accept_channel_msg = get_event_msg!(other_node, MessageSendEvent::SendAcceptChannel, funding_node.node.get_our_node_id());
+		funding_node.node.handle_accept_channel(&other_node.node.get_our_node_id(), &accept_channel_msg);
+
+		// Create the corresponding funding output.
+		let events = funding_node.node.get_and_clear_pending_events();
+		assert_eq!(events.len(), 1);
+		match events[0] {
+			Event::FundingGenerationReady {
+				ref temporary_channel_id,
+				ref counterparty_node_id,
+				channel_value_satoshis: ref event_channel_value_satoshis,
+				ref output_script,
+				user_channel_id: ref event_user_channel_id
+			} => {
+				assert_eq!(temporary_channel_id, &temp_chan_id);
+				assert_eq!(counterparty_node_id, &other_node.node.get_our_node_id());
+				assert_eq!(channel_value_satoshis, event_channel_value_satoshis);
+				assert_eq!(user_channel_id, event_user_channel_id);
+				tx_outs.push(TxOut {
+					value: *channel_value_satoshis, script_pubkey: output_script.clone(),
+				});
+			},
+			_ => panic!("Unexpected event"),
+		};
+		temp_chan_ids.push((temp_chan_id, other_node.node.get_our_node_id()));
+	}
+
+	// Compose the batch funding transaction and give it to the ChannelManager.
+	let tx = Transaction {
+		version: 2,
+		lock_time: PackedLockTime::ZERO,
+		input: Vec::new(),
+		output: tx_outs,
+	};
+	assert!(funding_node.node.batch_funding_transaction_generated(
+		temp_chan_ids.iter().map(|(a, b)| (a, b)).collect::<Vec<_>>().as_slice(),
+		tx.clone(),
+	).is_ok());
+	check_added_monitors!(funding_node, 0);
+	let events = funding_node.node.get_and_clear_pending_msg_events();
+	assert_eq!(events.len(), params.len());
+	for (other_node, ..) in params {
+		let funding_created = events
+			.iter()
+			.find_map(|event| match event {
+				MessageSendEvent::SendFundingCreated { node_id, msg } if node_id == &other_node.node.get_our_node_id() => Some(msg.clone()),
+				_ => None,
+			})
+			.unwrap();
+		funding_created_msgs.push(funding_created);
+	}
+	return (tx, funding_created_msgs);
 }

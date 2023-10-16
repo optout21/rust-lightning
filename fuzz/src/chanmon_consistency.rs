@@ -138,7 +138,7 @@ impl TestChainMonitor {
 	}
 }
 impl chain::Watch<TestChannelSigner> for TestChainMonitor {
-	fn watch_channel(&self, funding_txo: OutPoint, monitor: channelmonitor::ChannelMonitor<TestChannelSigner>) -> chain::ChannelMonitorUpdateStatus {
+	fn watch_channel(&self, funding_txo: OutPoint, monitor: channelmonitor::ChannelMonitor<TestChannelSigner>) -> Result<chain::ChannelMonitorUpdateStatus, ()> {
 		let mut ser = VecWriter(Vec::new());
 		monitor.write(&mut ser).unwrap();
 		if let Some(_) = self.latest_monitors.lock().unwrap().insert(funding_txo, (monitor.get_latest_update_id(), ser.0)) {
@@ -155,7 +155,7 @@ impl chain::Watch<TestChannelSigner> for TestChainMonitor {
 		};
 		let deserialized_monitor = <(BlockHash, channelmonitor::ChannelMonitor<TestChannelSigner>)>::
 			read(&mut Cursor::new(&map_entry.get().1), (&*self.keys, &*self.keys)).unwrap().1;
-		deserialized_monitor.update_monitor(update, &&TestBroadcaster{}, &FuzzEstimator { ret_val: atomic::AtomicU32::new(253) }, &self.logger).unwrap();
+		deserialized_monitor.update_monitor(update, &&TestBroadcaster{}, &&FuzzEstimator { ret_val: atomic::AtomicU32::new(253) }, &self.logger).unwrap();
 		let mut ser = VecWriter(Vec::new());
 		deserialized_monitor.write(&mut ser).unwrap();
 		map_entry.insert((update.update_id, ser.0));
@@ -371,6 +371,7 @@ fn send_payment(source: &ChanMan, dest: &ChanMan, dest_chan_id: u64, amt: u64, p
 			channel_features: dest.channel_features(),
 			fee_msat: amt,
 			cltv_expiry_delta: 200,
+			maybe_announced_channel: true,
 		}], blinded_tail: None }],
 		route_params: None,
 	}, payment_hash, RecipientOnionFields::secret_only(payment_secret), PaymentId(payment_id)) {
@@ -405,6 +406,7 @@ fn send_hop_payment(source: &ChanMan, middle: &ChanMan, middle_chan_id: u64, des
 			channel_features: middle.channel_features(),
 			fee_msat: first_hop_fee,
 			cltv_expiry_delta: 100,
+			maybe_announced_channel: true,
 		}, RouteHop {
 			pubkey: dest.get_our_node_id(),
 			node_features: dest.node_features(),
@@ -412,6 +414,7 @@ fn send_hop_payment(source: &ChanMan, middle: &ChanMan, middle_chan_id: u64, des
 			channel_features: dest.channel_features(),
 			fee_msat: amt,
 			cltv_expiry_delta: 200,
+			maybe_announced_channel: true,
 		}], blinded_tail: None }],
 		route_params: None,
 	}, payment_hash, RecipientOnionFields::secret_only(payment_secret), PaymentId(payment_id)) {
@@ -497,7 +500,7 @@ pub fn do_test<Out: Output>(data: &[u8], underlying_out: Out) {
 			let res = (<(BlockHash, ChanMan)>::read(&mut Cursor::new(&$ser.0), read_args).expect("Failed to read manager").1, chain_monitor.clone());
 			for (funding_txo, mon) in monitors.drain() {
 				assert_eq!(chain_monitor.chain_monitor.watch_channel(funding_txo, mon),
-					ChannelMonitorUpdateStatus::Completed);
+					Ok(ChannelMonitorUpdateStatus::Completed));
 			}
 			res
 		} }

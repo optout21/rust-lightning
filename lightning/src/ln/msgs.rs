@@ -39,10 +39,12 @@ use crate::onion_message;
 use crate::sign::{NodeSigner, Recipient};
 
 use crate::prelude::*;
+#[cfg(feature = "std")]
 use core::convert::TryFrom;
 use core::fmt;
 use core::fmt::Debug;
 use core::ops::Deref;
+#[cfg(feature = "std")]
 use core::str::FromStr;
 use crate::io::{self, Cursor, Read};
 use crate::io_extras::read_to_end;
@@ -635,7 +637,8 @@ pub struct UpdateAddHTLC {
 pub struct OnionMessage {
 	/// Used in decrypting the onion packet's payload.
 	pub blinding_point: PublicKey,
-	pub(crate) onion_routing_packet: onion_message::Packet,
+	/// The full onion packet including hop data, pubkey, and hmac
+	pub onion_routing_packet: onion_message::Packet,
 }
 
 /// An [`update_fulfill_htlc`] message to be sent to or received from a peer.
@@ -959,7 +962,10 @@ impl From<std::net::SocketAddr> for SocketAddress {
 		}
 }
 
-fn parse_onion_address(host: &str, port: u16) -> Result<SocketAddress, SocketAddressParseError> {
+/// Parses an OnionV3 host and port into a [`SocketAddress::OnionV3`].
+///
+/// The host part must end with ".onion".
+pub fn parse_onion_address(host: &str, port: u16) -> Result<SocketAddress, SocketAddressParseError> {
 	if host.ends_with(".onion") {
 		let domain = &host[..host.len() - ".onion".len()];
 		if domain.len() != 56 {

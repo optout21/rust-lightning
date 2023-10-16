@@ -273,6 +273,7 @@ impl ChannelMessageHandler for ErroringMessageHandler {
 		features.set_basic_mpp_optional();
 		features.set_wumbo_optional();
 		features.set_shutdown_any_segwit_optional();
+		features.set_dual_fund_optional();
 		features.set_channel_type_optional();
 		features.set_scid_privacy_optional();
 		features.set_zero_conf_optional();
@@ -611,7 +612,7 @@ impl Peer {
 pub type SimpleArcPeerManager<SD, M, T, F, C, L> = PeerManager<
 	SD,
 	Arc<SimpleArcChannelManager<M, T, F, L>>,
-	Arc<P2PGossipSync<Arc<NetworkGraph<Arc<L>>>, Arc<C>, Arc<L>>>,
+	Arc<P2PGossipSync<Arc<NetworkGraph<Arc<L>>>, C, Arc<L>>>,
 	Arc<SimpleArcOnionMessenger<L>>,
 	Arc<L>,
 	IgnoringMessageHandler,
@@ -627,13 +628,13 @@ pub type SimpleArcPeerManager<SD, M, T, F, C, L> = PeerManager<
 ///
 /// This is not exported to bindings users as general type aliases don't make sense in bindings.
 pub type SimpleRefPeerManager<
-	'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm, 'n, SD, M, T, F, C, L
+	'a, 'b, 'c, 'd, 'e, 'f, 'logger, 'h, 'i, 'j, 'graph, SD, M, T, F, C, L
 > = PeerManager<
 	SD,
-	&'n SimpleRefChannelManager<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'm, M, T, F, L>,
-	&'f P2PGossipSync<&'g NetworkGraph<&'f L>, &'h C, &'f L>,
-	&'i SimpleRefOnionMessenger<'g, 'm, 'n, L>,
-	&'f L,
+	&'j SimpleRefChannelManager<'a, 'b, 'c, 'd, 'e, 'graph, 'logger, 'i, M, T, F, L>,
+	&'f P2PGossipSync<&'graph NetworkGraph<&'logger L>, C, &'logger L>,
+	&'h SimpleRefOnionMessenger<'logger, 'i, 'j, L>,
+	&'logger L,
 	IgnoringMessageHandler,
 	&'c KeysManager
 >;
