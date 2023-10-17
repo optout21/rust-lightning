@@ -192,12 +192,12 @@ mod tests {
 	// Use shortened names here, ExSt for ExpectedState
 	#[derive(Debug)]
 	enum ExSt {
-		LocalCh,    // LocalChange
-		RemoteCh,   // RemoteChange
-		LocalComp,  // LocalComplete
-		RemoteComp, // RemoteComplete
-		NegComp,    // NegotiationComplete
-		NegAb,      // NegotiationAborted
+		LocalCh, // LocalChange
+		// RemoteCh,   // RemoteChange
+		LocalComp, // LocalComplete
+		// RemoteComp, // RemoteComplete
+		NegComp, // NegotiationComplete
+		NegAb,   // NegotiationAborted
 	}
 
 	impl ExSt {
@@ -207,15 +207,15 @@ mod tests {
 				ExSt::LocalCh => {
 					assert!(matches!(state, StateMachine::LocalChange(_)))
 				}
-				ExSt::RemoteCh => {
-					assert!(matches!(state, StateMachine::RemoteChange(_)))
-				}
+				// ExSt::RemoteCh => {
+				// 	assert!(matches!(state, StateMachine::RemoteChange(_)))
+				// }
 				ExSt::LocalComp => {
 					assert!(matches!(state, StateMachine::LocalTxComplete(_)))
 				}
-				ExSt::RemoteComp => {
-					assert!(matches!(state, StateMachine::RemoteTxComplete(_)))
-				}
+				// ExSt::RemoteComp => {
+				// 	assert!(matches!(state, StateMachine::RemoteTxComplete(_)))
+				// }
 				ExSt::NegComp => {
 					assert!(matches!(state, StateMachine::NegotiationComplete(_)))
 				}
@@ -940,5 +940,48 @@ mod tests {
 				},
 			],
 		);
+	}
+
+	/// Dummy entropy source, returns all zeroes
+	struct DummyEntropySource {}
+
+	impl EntropySource for DummyEntropySource {
+		fn get_secure_random_bytes(&self) -> [u8; 32] {
+			[0; 32]
+		}
+	}
+
+	/// If the provided entropy is trivially wrong, we may generate events with duplicate serialIds, which is up to the counterparty to reject
+	#[test]
+	fn test_interact_tx_error_dummy_entropy() {
+		let channel_id = get_sample_channel_id();
+		let local_inputs =
+			vec![(get_sample_tx_input(), get_sample_input_tx()), (get_sample_tx_input_2(), get_sample_input_tx_2())];
+		let local_outputs = vec![get_sample_tx_output(), get_sample_tx_output_2()];
+		let dummy_entropy_source = DummyEntropySource {};
+		let (mut interact, msg) = InteractiveTxConstructor::new(
+			&&dummy_entropy_source,
+			channel_id,
+			FEERATE_FLOOR_SATS_PER_KW,
+			true,
+			PackedLockTime::ZERO,
+			local_inputs,
+			local_outputs,
+		);
+		let expected_serial_id = 0;
+		match msg {
+			Some(InteractiveTxMessageSend::TxAddInput(add)) => {
+				assert_eq!(add.serial_id, expected_serial_id);
+			}
+			_ => panic!("Expected TxAddInput! {:?}", msg),
+		}
+		// do a handle_complete, for the second message
+		let (msg, _tx) = interact.handle_tx_complete(&TxComplete { channel_id }).unwrap();
+		match msg {
+			Some(InteractiveTxMessageSend::TxAddInput(add)) => {
+				assert_eq!(add.serial_id, expected_serial_id);
+			}
+			_ => panic!("Expected TxAddInput! {:?}", msg),
+		}
 	}
 }
