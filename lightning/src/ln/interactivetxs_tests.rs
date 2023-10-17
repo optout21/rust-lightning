@@ -11,17 +11,17 @@
 mod tests {
 	use crate::chain::chaininterface::FEERATE_FLOOR_SATS_PER_KW;
 	use crate::chain::transaction::OutPoint;
-	use crate::ln::interactivetxs::{InteractiveTxConstructor, InteractiveTxMessageSend, StateMachine, AbortReason};
+	use crate::ln::interactivetxs::{AbortReason, InteractiveTxConstructor, InteractiveTxMessageSend, StateMachine};
 	use crate::ln::msgs::{TxAddInput, TxAddOutput, TxComplete};
 	use crate::ln::ChannelId;
 	use crate::sign::EntropySource;
-	use crate::util::ser::TransactionU16LenLimited;
 	use crate::util::atomic_counter::AtomicCounter;
+	use crate::util::chacha20::ChaCha20;
+	use crate::util::ser::TransactionU16LenLimited;
 	use bitcoin::hash_types::WPubkeyHash;
 	use bitcoin::hashes::Hash;
 	use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 	use bitcoin::{PackedLockTime, Script, Sequence, Transaction, TxIn, TxOut, Witness};
-	use crate::util::chacha20::ChaCha20;
 
 	// Fixtures
 
@@ -53,11 +53,7 @@ mod tests {
 
 	fn get_sample_tx_input() -> TxIn {
 		let intxid = get_sample_input_tx().txid();
-		let previous_output = OutPoint {
-			txid: intxid,
-			index: 0,
-		}
-		.into_bitcoin_outpoint();
+		let previous_output = OutPoint { txid: intxid, index: 0 }.into_bitcoin_outpoint();
 		TxIn {
 			previous_output,
 			script_sig: Script::new(),
@@ -70,11 +66,7 @@ mod tests {
 
 	fn get_sample_tx_input_2() -> TxIn {
 		let intxid = get_sample_input_tx_2().txid();
-		let previous_output = OutPoint {
-			txid: intxid,
-			index: 0,
-		}
-		.into_bitcoin_outpoint();
+		let previous_output = OutPoint { txid: intxid, index: 0 }.into_bitcoin_outpoint();
 		TxIn {
 			previous_output,
 			script_sig: Script::new(),
@@ -93,16 +85,8 @@ mod tests {
 
 	fn get_sample_input_tx_intern(pubkey: PublicKey, value: u64) -> Transaction {
 		let script_pubkey = Script::new_v0_p2wpkh(&WPubkeyHash::hash(&pubkey.serialize()));
-		let output = TxOut {
-			value,
-			script_pubkey,
-		};
-		Transaction {
-			version: 2,
-			lock_time: PackedLockTime::ZERO,
-			output: vec![output],
-			input: vec![],
-		}
+		let output = TxOut { value, script_pubkey };
+		Transaction { version: 2, lock_time: PackedLockTime::ZERO, output: vec![output], input: vec![] }
 	}
 
 	fn get_sample_input_tx() -> Transaction {
@@ -117,58 +101,56 @@ mod tests {
 		get_sample_input_tx_intern(get_sample_pubkey(13), 550013)
 	}
 
-	fn get_sample_tx_add_input_intern(serial_id: u64, channel_id: ChannelId, prevtx: TransactionU16LenLimited) -> TxAddInput {
+	fn get_sample_tx_add_input_intern(
+		serial_id: u64, channel_id: ChannelId, prevtx: TransactionU16LenLimited,
+	) -> TxAddInput {
 		TxAddInput { channel_id, serial_id, prevtx, prevtx_out: 0, sequence: 305419896 }
 	}
 
 	fn get_sample_tx_add_input(serial_id: u64, channel_id: ChannelId) -> TxAddInput {
-		get_sample_tx_add_input_intern(serial_id, channel_id, TransactionU16LenLimited::new(get_sample_input_tx()).unwrap())
+		get_sample_tx_add_input_intern(
+			serial_id,
+			channel_id,
+			TransactionU16LenLimited::new(get_sample_input_tx()).unwrap(),
+		)
 	}
 
 	fn get_sample_tx_add_input_2(serial_id: u64, channel_id: ChannelId) -> TxAddInput {
-		get_sample_tx_add_input_intern(serial_id, channel_id, TransactionU16LenLimited::new(get_sample_input_tx_2()).unwrap())
+		get_sample_tx_add_input_intern(
+			serial_id,
+			channel_id,
+			TransactionU16LenLimited::new(get_sample_input_tx_2()).unwrap(),
+		)
 	}
 
 	fn get_sample_tx_add_input_3(serial_id: u64, channel_id: ChannelId) -> TxAddInput {
-		get_sample_tx_add_input_intern(serial_id, channel_id, TransactionU16LenLimited::new(get_sample_input_tx_3()).unwrap())
+		get_sample_tx_add_input_intern(
+			serial_id,
+			channel_id,
+			TransactionU16LenLimited::new(get_sample_input_tx_3()).unwrap(),
+		)
 	}
 
 	fn get_sample_tx_output() -> TxOut {
 		let pubkey = get_sample_pubkey(21);
 		let script_pubkey = Script::new_v0_p2wpkh(&WPubkeyHash::hash(&pubkey.serialize()));
-		TxOut {
-			value: 540021,
-			script_pubkey,
-		}
+		TxOut { value: 540021, script_pubkey }
 	}
 
 	fn get_sample_tx_output_2() -> TxOut {
 		let pubkey = get_sample_pubkey(21);
 		let script_pubkey = Script::new_v0_p2wpkh(&WPubkeyHash::hash(&pubkey.serialize()));
-		TxOut {
-			value: 540022,
-			script_pubkey,
-		}
+		TxOut { value: 540022, script_pubkey }
 	}
 
 	fn get_sample_tx_add_output(serial_id: u64, channel_id: ChannelId) -> TxAddOutput {
 		let tx_out = get_sample_tx_output();
-		TxAddOutput {
-			channel_id,
-			serial_id,
-			sats: tx_out.value,
-			script: tx_out.script_pubkey,
-		}
+		TxAddOutput { channel_id, serial_id, sats: tx_out.value, script: tx_out.script_pubkey }
 	}
 
 	fn get_sample_tx_add_output_2(serial_id: u64, channel_id: ChannelId) -> TxAddOutput {
 		let tx_out = get_sample_tx_output_2();
-		TxAddOutput {
-			channel_id,
-			serial_id,
-			sats: tx_out.value,
-			script: tx_out.script_pubkey,
-		}
+		TxAddOutput { channel_id, serial_id, sats: tx_out.value, script: tx_out.script_pubkey }
 	}
 
 	// Use shortened names here, InvHM for InvokeHandleMethod
@@ -181,10 +163,8 @@ mod tests {
 
 	impl InvHM {
 		fn do_invoke(
-			&self,
-			interact_tx: &mut InteractiveTxConstructor,
-		) -> Result<(Option<InteractiveTxMessageSend>, Option<Transaction>), AbortReason>
-		{
+			&self, interact_tx: &mut InteractiveTxConstructor,
+		) -> Result<(Option<InteractiveTxMessageSend>, Option<Transaction>), AbortReason> {
 			match self {
 				InvHM::AddI(txai) => {
 					let msg = interact_tx.handle_tx_add_input(txai)?;
@@ -194,9 +174,7 @@ mod tests {
 					let msg = interact_tx.handle_tx_add_output(txao)?;
 					Ok((Some(msg), None))
 				}
-				InvHM::Comp(channel_id) => interact_tx.handle_tx_complete(&TxComplete {
-					channel_id: *channel_id,
-				}),
+				InvHM::Comp(channel_id) => interact_tx.handle_tx_complete(&TxComplete { channel_id: *channel_id }),
 			}
 		}
 	}
@@ -204,16 +182,17 @@ mod tests {
 	// Use shortened names here, ExSt for ExpectedState
 	#[derive(Debug)]
 	enum ExSt {
-		LocalCh,	// LocalChange
+		LocalCh,    // LocalChange
 		RemoteCh,   // RemoteChange
 		LocalComp,  // LocalComplete
 		RemoteComp, // RemoteComplete
-		NegComp,	// NegotiationComplete
-		NegAb,	  // NegotiationAborted
+		NegComp,    // NegotiationComplete
+		NegAb,      // NegotiationAborted
 	}
 
 	impl ExSt {
 		fn match_state(&self, state: &StateMachine) {
+			println!("Current state: {:?}", state);
 			match self {
 				ExSt::LocalCh => {
 					assert!(matches!(state, StateMachine::LocalChange(_)))
@@ -247,18 +226,9 @@ mod tests {
 	impl ExMsg {
 		fn match_msg(&self, msg: &Option<InteractiveTxMessageSend>) {
 			match self {
-				ExMsg::AddI => assert!(matches!(
-					msg.as_ref().unwrap(),
-					InteractiveTxMessageSend::TxAddInput(_)
-				)),
-				ExMsg::AddO => assert!(matches!(
-					msg.as_ref().unwrap(),
-					InteractiveTxMessageSend::TxAddOutput(_)
-				)),
-				ExMsg::Comp => assert!(matches!(
-					msg.as_ref().unwrap(),
-					InteractiveTxMessageSend::TxComplete(_)
-				)),
+				ExMsg::AddI => assert!(matches!(msg.as_ref().unwrap(), InteractiveTxMessageSend::TxAddInput(_))),
+				ExMsg::AddO => assert!(matches!(msg.as_ref().unwrap(), InteractiveTxMessageSend::TxAddOutput(_))),
+				ExMsg::Comp => assert!(matches!(msg.as_ref().unwrap(), InteractiveTxMessageSend::TxComplete(_))),
 			}
 		}
 	}
@@ -272,25 +242,19 @@ mod tests {
 
 	impl ExTx {
 		fn new(input_count: u16, output_count: u16) -> Self {
-			ExTx {
-				input_count,
-				output_count,
-			}
+			ExTx { input_count, output_count }
 		}
 
 		fn match_tx(&self, tx: &Option<Transaction>) {
 			assert_eq!(tx.as_ref().unwrap().input.len(), self.input_count as usize);
-			assert_eq!(
-				tx.as_ref().unwrap().output.len(),
-				self.output_count as usize
-			);
+			assert_eq!(tx.as_ref().unwrap().output.len(), self.output_count as usize);
 		}
 	}
 
 	/// Use shortened names here, ExInvRes ExpectedInvokeResult
 	#[derive(Debug)]
 	struct ExInvRes {
-		is_error: bool,
+		error_expected: Option<AbortReason>,
 		state: ExSt,
 		message: Option<ExMsg>,
 		tx: Option<ExTx>,
@@ -299,22 +263,12 @@ mod tests {
 	impl ExInvRes {
 		// ctor with success result
 		fn ok(state: ExSt, message: Option<ExMsg>, tx: Option<ExTx>) -> Self {
-			Self {
-				is_error: false,
-				state,
-				message,
-				tx,
-			}
+			Self { error_expected: None, state, message, tx }
 		}
 
 		// ctor with error result
-		fn error() -> Self {
-			Self {
-				is_error: true,
-				state: ExSt::NegAb,
-				message: None,
-				tx: None,
-			}
+		fn error(error: AbortReason) -> Self {
+			Self { error_expected: Some(error), state: ExSt::NegAb, message: None, tx: None }
 		}
 
 		fn match_state(&self, state: &StateMachine) {
@@ -345,14 +299,10 @@ mod tests {
 		expected_state: ExInvRes,
 	}
 
-	/// Test helper: create an InteractiveTxConstructor, and perform a number of steps, and check results after each.
+	// Test helper: create an InteractiveTxConstructor, and perform a number of steps, and check results after each.
 	fn run_interactive_tx(
-		channel_id: ChannelId,
-		is_initiator: bool,
-		local_inputs: Vec<(TxIn, Transaction)>,
-		local_outputs: Vec<TxOut>,
-		expected_initial_state: ExInvRes,
-		invocations: Vec<Invoke>,
+		channel_id: ChannelId, is_initiator: bool, local_inputs: Vec<(TxIn, Transaction)>, local_outputs: Vec<TxOut>,
+		expected_initial_state: ExInvRes, invocations: Vec<Invoke>,
 	) {
 		let entropy_source = TestEntropySource::new();
 		let (mut interact, msg) = InteractiveTxConstructor::new(
@@ -374,15 +324,21 @@ mod tests {
 			let invoke_res = i.invoke.do_invoke(&mut interact);
 			// check post state
 			i.expected_state.match_state(&interact.get_state_machine());
-			if let Err(_) = invoke_res {
-				if i.expected_state.is_error {
-					// OK
+			if let Err(err_act) = invoke_res {
+				if let Some(err_exp) = i.expected_state.error_expected {
+					// Expected error, got error
+					if err_exp != err_act {
+						panic!(
+							"Got different error than expected, exp {:?} act {:?} inv {:?}",
+							err_exp, err_act, i.invoke
+						);
+					}
 				} else {
-					panic!("Error invoking, {:?}", i.invoke);
+					panic!("Unexpected error invoking, {:?} {:?}", err_act, i.invoke);
 				}
 			} else {
-				if i.expected_state.is_error {
-					panic!("Invocation OK but expected error, {:?}", i.invoke);
+				if let Some(err_exp) = i.expected_state.error_expected {
+					panic!("Invocation OK but expected error, {:?} {:?}", err_exp, i.invoke);
 				} else {
 					// OK
 					i.expected_state.match_msg(&invoke_res.as_ref().unwrap().0);
@@ -407,14 +363,7 @@ mod tests {
 	#[test]
 	fn test_interact_tx_noni_construct() {
 		let channel_id = get_sample_channel_id();
-		run_interactive_tx(
-			channel_id,
-			false,
-			vec![],
-			vec![],
-			ExInvRes::ok(ExSt::LocalCh, None, None),
-			vec![],
-		);
+		run_interactive_tx(channel_id, false, vec![], vec![], ExInvRes::ok(ExSt::LocalCh, None, None), vec![]);
 	}
 
 	#[test]
@@ -475,11 +424,7 @@ mod tests {
 				},
 				Invoke {
 					invoke: InvHM::Comp(channel_id),
-					expected_state: ExInvRes::ok(
-						ExSt::NegComp,
-						Some(ExMsg::Comp),
-						Some(ExTx::new(1, 1)),
-					),
+					expected_state: ExInvRes::ok(ExSt::NegComp, Some(ExMsg::Comp), Some(ExTx::new(1, 1))),
 				},
 			],
 		);
@@ -506,15 +451,11 @@ mod tests {
 					invoke: InvHM::Comp(channel_id),
 					expected_state: ExInvRes::ok(ExSt::LocalCh, Some(ExMsg::AddO), None),
 				},
-				// TODO check why does this fail?
-				// InvokeStep {
-				//	 invoke: InvHM::HandleComplete(channel_id),
-				//	 expected_state: ExpectedInvokeResult {
-				//		 ExMsg::NegotiationAborted,
-				//		 Some(ExMsg::TxAddOutput),
-				//		 None,
-				//	 },
-				// },
+				// Error because the initiator is expected to pay fee for common fields, they contributed 0, which is insufficient
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::error(AbortReason::InsufficientFees),
+				},
 			],
 		);
 	}
@@ -555,10 +496,10 @@ mod tests {
 			vec![],
 			ExInvRes::ok(ExSt::LocalCh, None, None),
 			vec![
-				// Aborts as there is no input to pay for fee
+				// Error because the initiator is expected to pay fee for common fields, they contributed 0, which is insufficient
 				Invoke {
 					invoke: InvHM::Comp(channel_id),
-					expected_state: ExInvRes::error(),
+					expected_state: ExInvRes::error(AbortReason::InsufficientFees),
 				},
 			],
 		);
@@ -574,7 +515,7 @@ mod tests {
 			vec![],
 			ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
 			vec![
-				// TODO: Empty TX is accepted here, check if correct
+				// Empty inputs accepted here (counterparty fee check is OK)
 				Invoke {
 					invoke: InvHM::Comp(channel_id),
 					expected_state: ExInvRes::ok(ExSt::NegComp, None, Some(ExTx::new(0, 0))),
@@ -636,28 +577,40 @@ mod tests {
 				},
 				Invoke {
 					invoke: InvHM::Comp(channel_id),
-					expected_state: ExInvRes::ok(
-						ExSt::NegComp,
-						Some(ExMsg::Comp),
-						Some(ExTx::new(2, 2)),
-					),
+					expected_state: ExInvRes::ok(ExSt::NegComp, Some(ExMsg::Comp), Some(ExTx::new(2, 2))),
 				},
 			],
 		);
 	}
 
-	// TODO: no abort support!
-	// #[test]
-	// fn test_interact_tx_noni_j_u_abort() {
-	// 	let entropy_source = TestEntropySource{};
-	// 	let channel_id = get_sample_channel_id();
-	// 	let (mut interact, msg) = InteractiveTxConstructor::new(&entropy_source, channel_id, FEERATE_FLOOR_SATS_PER_KW, false, PackedLockTime::ZERO, vec![], vec![]);
-	// 	assert!(matches!(interact.get_state_machine(), StateMachine::LocalChange(_)));
-	// 	assert!(msg.is_none());
-
-	// 	let msg2 = interact.handle_abort().unwrap();
-	// 	...
-	// }
+	#[test]
+	#[allow(non_snake_case)]
+	fn test_interact_tx_noni_jIO_complete() {
+		let channel_id = get_sample_channel_id();
+		let inputs = vec![(get_sample_tx_input(), get_sample_input_tx())];
+		let outputs = vec![get_sample_tx_output()];
+		run_interactive_tx(
+			channel_id,
+			false,
+			inputs,
+			outputs,
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input_2(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalCh, Some(ExMsg::AddI), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::LocalCh, Some(ExMsg::AddO), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::NegComp, Some(ExMsg::Comp), Some(ExTx::new(2, 1))),
+				},
+			],
+		);
+	}
 
 	#[test]
 	fn test_interact_tx_noni_jjuu_complete() {
@@ -731,10 +684,8 @@ mod tests {
 	#[allow(non_snake_case)]
 	fn test_interact_tx_init_IIOO_complete() {
 		let channel_id = get_sample_channel_id();
-		let inputs = vec![
-			(get_sample_tx_input(), get_sample_input_tx()),
-			(get_sample_tx_input_2(), get_sample_input_tx_2()),
-		];
+		let inputs =
+			vec![(get_sample_tx_input(), get_sample_input_tx()), (get_sample_tx_input_2(), get_sample_input_tx_2())];
 		let outputs = vec![get_sample_tx_output(), get_sample_tx_output_2()];
 		run_interactive_tx(
 			channel_id,
@@ -757,11 +708,7 @@ mod tests {
 				},
 				Invoke {
 					invoke: InvHM::Comp(channel_id),
-					expected_state: ExInvRes::ok(
-						ExSt::NegComp,
-						Some(ExMsg::Comp),
-						Some(ExTx::new(2, 2)),
-					),
+					expected_state: ExInvRes::ok(ExSt::NegComp, Some(ExMsg::Comp), Some(ExTx::new(2, 2))),
 				},
 			],
 		);
