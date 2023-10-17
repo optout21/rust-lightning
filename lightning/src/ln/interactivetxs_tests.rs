@@ -12,7 +12,7 @@ mod tests {
 	use crate::chain::chaininterface::FEERATE_FLOOR_SATS_PER_KW;
 	use crate::chain::transaction::OutPoint;
 	use crate::ln::interactivetxs::{AbortReason, InteractiveTxConstructor, InteractiveTxMessageSend, StateMachine};
-	use crate::ln::msgs::{TxAddInput, TxAddOutput, TxComplete, TxRemoveInput, TxRemoveOutput};
+	use crate::ln::msgs::{SerialId, TxAddInput, TxAddOutput, TxComplete, TxRemoveInput, TxRemoveOutput};
 	use crate::ln::ChannelId;
 	use crate::sign::EntropySource;
 	use crate::util::atomic_counter::AtomicCounter;
@@ -234,11 +234,28 @@ mod tests {
 	}
 
 	impl ExMsg {
-		fn match_msg(&self, msg: &Option<InteractiveTxMessageSend>) {
-			match self {
-				ExMsg::AddI => assert!(matches!(msg.as_ref().unwrap(), InteractiveTxMessageSend::TxAddInput(_))),
-				ExMsg::AddO => assert!(matches!(msg.as_ref().unwrap(), InteractiveTxMessageSend::TxAddOutput(_))),
-				ExMsg::Comp => assert!(matches!(msg.as_ref().unwrap(), InteractiveTxMessageSend::TxComplete(_))),
+		/// Verify the actual message against the expected.
+		/// For messages with serialId, also verify the parity.
+		fn match_msg(&self, msg: &Option<InteractiveTxMessageSend>, is_initiator: bool) {
+			match msg.as_ref().unwrap() {
+				InteractiveTxMessageSend::TxAddInput(txai) => {
+					assert!(matches!(self, ExMsg::AddI));
+					self.check_serial_id(txai.serial_id, is_initiator);
+				}
+				InteractiveTxMessageSend::TxAddOutput(txao) => {
+					assert!(matches!(self, ExMsg::AddO));
+					self.check_serial_id(txao.serial_id, is_initiator);
+				}
+				InteractiveTxMessageSend::TxComplete(_) => assert!(matches!(self, ExMsg::Comp)),
+			}
+		}
+
+		/// Check for the parity of serialId: even for initiator, odd for acceptor
+		fn check_serial_id(&self, serial_id: SerialId, is_initiator: bool) {
+			if is_initiator {
+				assert_eq!(serial_id % 2, 0);
+			} else {
+				assert_eq!(serial_id % 2, 1);
 			}
 		}
 	}
@@ -285,9 +302,9 @@ mod tests {
 			self.state.match_state(state);
 		}
 
-		fn match_msg(&self, msg: &Option<InteractiveTxMessageSend>) {
+		fn match_msg(&self, msg: &Option<InteractiveTxMessageSend>, is_initiator: bool) {
 			if let Some(m) = &self.message {
-				m.match_msg(msg);
+				m.match_msg(msg, is_initiator);
 			} else {
 				assert!(msg.is_none());
 			}
@@ -326,7 +343,7 @@ mod tests {
 		);
 
 		expected_initial_state.match_state(&interact.get_state_machine());
-		expected_initial_state.match_msg(&msg);
+		expected_initial_state.match_msg(&msg, is_initiator);
 
 		// Process invocations
 		for i in invocations {
@@ -351,7 +368,7 @@ mod tests {
 					panic!("Invocation OK but expected error, {:?} {:?}", err_exp, i.invoke);
 				} else {
 					// OK
-					i.expected_state.match_msg(&invoke_res.as_ref().unwrap().0);
+					i.expected_state.match_msg(&invoke_res.as_ref().unwrap().0, is_initiator);
 					i.expected_state.match_tx(&invoke_res.as_ref().unwrap().1);
 				}
 			}
@@ -973,7 +990,7 @@ mod tests {
 			Some(InteractiveTxMessageSend::TxAddInput(add)) => {
 				assert_eq!(add.serial_id, expected_serial_id);
 			}
-			_ => panic!("Expected TxAddInput! {:?}", msg),
+			_ => panic!("Expected TxAddInput!"),
 		}
 		// do a handle_complete, for the second message
 		let (msg, _tx) = interact.handle_tx_complete(&TxComplete { channel_id }).unwrap();
@@ -981,7 +998,7 @@ mod tests {
 			Some(InteractiveTxMessageSend::TxAddInput(add)) => {
 				assert_eq!(add.serial_id, expected_serial_id);
 			}
-			_ => panic!("Expected TxAddInput! {:?}", msg),
+			_ => panic!("Expected TxAddInput!"),
 		}
 	}
 }
