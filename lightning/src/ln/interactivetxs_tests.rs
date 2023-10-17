@@ -12,7 +12,7 @@ mod tests {
 	use crate::chain::chaininterface::FEERATE_FLOOR_SATS_PER_KW;
 	use crate::chain::transaction::OutPoint;
 	use crate::ln::interactivetxs::{AbortReason, InteractiveTxConstructor, InteractiveTxMessageSend, StateMachine};
-	use crate::ln::msgs::{TxAddInput, TxAddOutput, TxComplete};
+	use crate::ln::msgs::{TxAddInput, TxAddOutput, TxComplete, TxRemoveInput, TxRemoveOutput};
 	use crate::ln::ChannelId;
 	use crate::sign::EntropySource;
 	use crate::util::atomic_counter::AtomicCounter;
@@ -156,9 +156,11 @@ mod tests {
 	// Use shortened names here, InvHM for InvokeHandleMethod
 	#[derive(Debug)]
 	enum InvHM {
-		AddI(TxAddInput),  // AddInput
-		AddO(TxAddOutput), // AddOutput
-		Comp(ChannelId),   // Complete
+		AddI(TxAddInput),     // AddInput
+		AddO(TxAddOutput),    // AddOutput
+		Comp(ChannelId),      // Complete
+		RemI(TxRemoveInput),  // RemoveInput
+		RemO(TxRemoveOutput), // RemoveOutput
 	}
 
 	impl InvHM {
@@ -175,6 +177,14 @@ mod tests {
 					Ok((Some(msg), None))
 				}
 				InvHM::Comp(channel_id) => interact_tx.handle_tx_complete(&TxComplete { channel_id: *channel_id }),
+				InvHM::RemI(txri) => {
+					let msg = interact_tx.handle_tx_remove_input(txri)?;
+					Ok((Some(msg), None))
+				}
+				InvHM::RemO(txro) => {
+					let msg = interact_tx.handle_tx_remove_output(txro)?;
+					Ok((Some(msg), None))
+				}
 			}
 		}
 	}
@@ -774,7 +784,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_wrong_serial_id_parity() {
+	fn test_interact_tx_error_wrong_serial_id_parity_noni() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -791,7 +801,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_duplicate_serial_id() {
+	fn test_interact_tx_error_duplicate_serial_id_noni() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -813,7 +823,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_interact_tx_noni_complete_complete() {
+	fn test_interact_tx_error_complete_complete_noni() {
 		let channel_id = get_sample_channel_id();
 		run_interactive_tx(
 			channel_id,
@@ -837,6 +847,96 @@ mod tests {
 				Invoke {
 					invoke: InvHM::Comp(channel_id),
 					expected_state: ExInvRes::error(AbortReason::UnexpectedCounterpartyMessage),
+				},
+			],
+		);
+	}
+
+	#[test]
+	fn test_interact_tx_noni_jju_remove_input() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input_2(123004, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddO(get_sample_tx_add_output(123006, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::RemI(TxRemoveInput { channel_id, serial_id: 123002 }),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::NegComp, None, Some(ExTx::new(1, 1))),
+				},
+			],
+		);
+	}
+
+	#[test]
+	fn test_interact_tx_noni_juu_remove_output() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddO(get_sample_tx_add_output(123004, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddO(get_sample_tx_add_output_2(123006, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::RemO(TxRemoveOutput { channel_id, serial_id: 123004 }),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::NegComp, None, Some(ExTx::new(1, 1))),
+				},
+			],
+		);
+	}
+
+	#[test]
+	fn test_interact_tx_error_remove_serial_id_unknown_noni_j() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::RemI(TxRemoveInput { channel_id, serial_id: 123004 }),
+					expected_state: ExInvRes::error(AbortReason::SerialIdUnknown),
 				},
 			],
 		);
