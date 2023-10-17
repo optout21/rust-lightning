@@ -772,5 +772,73 @@ mod tests {
 			],
 		);
 	}
-}
 
+	#[test]
+	fn test_interact_tx_noni_wrong_serial_id_parity() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			// Remote serialID should be even
+			vec![Invoke {
+				invoke: InvHM::AddI(get_sample_tx_add_input(123001, channel_id)),
+				expected_state: ExInvRes::error(AbortReason::IncorrectSerialIdParity),
+			}],
+		);
+	}
+
+	#[test]
+	fn test_interact_tx_noni_duplicate_serial_id() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input_2(123002, channel_id)),
+					expected_state: ExInvRes::error(AbortReason::DuplicateSerialId),
+				},
+			],
+		);
+	}
+
+	#[test]
+	fn test_interact_tx_noni_complete_complete() {
+		let channel_id = get_sample_channel_id();
+		run_interactive_tx(
+			channel_id,
+			false,
+			vec![],
+			vec![],
+			ExInvRes::ok(ExSt::LocalCh, None, None),
+			vec![
+				Invoke {
+					invoke: InvHM::AddI(get_sample_tx_add_input(123002, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::AddO(get_sample_tx_add_output(123004, channel_id)),
+					expected_state: ExInvRes::ok(ExSt::LocalComp, Some(ExMsg::Comp), None),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::ok(ExSt::NegComp, None, Some(ExTx::new(1, 1))),
+				},
+				Invoke {
+					invoke: InvHM::Comp(channel_id),
+					expected_state: ExInvRes::error(AbortReason::UnexpectedCounterpartyMessage),
+				},
+			],
+		);
+	}
+}
