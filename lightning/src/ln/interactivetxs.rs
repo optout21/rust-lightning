@@ -697,6 +697,7 @@ impl InteractiveTxConstructor {
 		}
 	}
 
+	/// Accessor for internal field (for testability)
 	#[cfg(test)]
 	pub(crate) fn get_state_machine(&self) -> &StateMachine { &self.state_machine }
 }

@@ -1394,6 +1394,7 @@ impl TransactionU16LenLimited {
 	}
 
 	/// Access inner transaction, as reference
+	#[cfg(test)]
 	pub(crate) fn inner(&self) -> &Transaction {
 		&self.0
 	}
