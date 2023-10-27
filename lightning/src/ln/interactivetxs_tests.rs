@@ -986,19 +986,8 @@ mod tests {
 			local_outputs,
 		);
 		let expected_serial_id = 0;
-		match msg {
-			Some(InteractiveTxMessageSend::TxAddInput(add)) => {
-				assert_eq!(add.serial_id, expected_serial_id);
-			}
-			_ => panic!("Expected TxAddInput!"),
-		}
-		// do a handle_complete, for the second message
+		assert!(matches!(msg, Some(InteractiveTxMessageSend::TxAddInput(add)) if add.serial_id == expected_serial_id));
 		let (msg, _tx) = interact.handle_tx_complete(&TxComplete { channel_id }).unwrap();
-		match msg {
-			Some(InteractiveTxMessageSend::TxAddInput(add)) => {
-				assert_eq!(add.serial_id, expected_serial_id);
-			}
-			_ => panic!("Expected TxAddInput!"),
-		}
+		assert!(matches!(msg, Some(InteractiveTxMessageSend::TxAddInput(add)) if add.serial_id == expected_serial_id));
 	}
 }
