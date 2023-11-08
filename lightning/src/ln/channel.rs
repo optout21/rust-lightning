@@ -29,7 +29,7 @@ use crate::ln::msgs;
 use crate::ln::msgs::DecodeError;
 use crate::ln::script::{self, ShutdownScript};
 use crate::ln::channelmanager::{self, CounterpartyForwardingInfo, PendingHTLCStatus, HTLCSource, SentHTLCId, HTLCFailureMsg, PendingHTLCInfo, RAACommitmentOrder, BREAKDOWN_TIMEOUT, MIN_CLTV_EXPIRY_DELTA, MAX_LOCAL_BREAKDOWN_TIMEOUT, ChannelShutdownState};
-use crate::ln::chan_utils::{CounterpartyCommitmentSecrets, TxCreationKeys, HTLCOutputInCommitment, htlc_success_tx_weight, htlc_timeout_tx_weight, make_funding_redeemscript, ChannelPublicKeys, CommitmentTransaction, HolderCommitmentTransaction, ChannelTransactionParameters, CounterpartyChannelTransactionParameters, MAX_HTLCS, get_commitment_transaction_number_obscure_factor, ClosingTransaction};
+use crate::ln::chan_utils::{CounterpartyCommitmentSecrets, TxCreationKeys, HTLCOutputInCommitment, htlc_success_tx_weight, htlc_timeout_tx_weight, make_funding_redeemscript, ChannelPublicKeys, CommitmentTransaction, HolderCommitmentTransaction, ChannelFundingTransactions, ChannelTransactionParameters, CounterpartyChannelTransactionParameters, MAX_HTLCS, get_commitment_transaction_number_obscure_factor, ClosingTransaction};
 use crate::ln::chan_utils;
 use crate::ln::onion_utils::HTLCFailReason;
 use crate::chain::BestBlock;
@@ -816,8 +816,8 @@ pub(super) struct ChannelContext<SP: Deref> where SP::Target: SignerProvider {
 	closing_fee_limits: Option<(u64, u64)>,
 
 	/// The hash of the block in which the funding transaction was included.
-	funding_tx_confirmed_in: Option<BlockHash>,
-	funding_tx_confirmation_height: u32,
+	// funding_tx_confirmed_in2: Option<BlockHash>,
+	// funding_tx_confirmation_height2: u32,
 	short_channel_id: Option<u64>,
 	/// Either the height at which this channel was created or the height at which it was last
 	/// serialized if it was serialized by versions prior to 0.0.103.
@@ -861,7 +861,8 @@ pub(super) struct ChannelContext<SP: Deref> where SP::Target: SignerProvider {
 	counterparty_forwarding_info: Option<CounterpartyForwardingInfo>,
 
 	pub(crate) channel_transaction_parameters: ChannelTransactionParameters,
-	funding_transaction: Option<Transaction>,
+	pub(crate) funding_transaction: ChannelFundingTransactions,
+	// funding_transaction2: Option<Transaction>,
 	is_batch_funding: Option<()>,
 
 	counterparty_cur_commitment_point: Option<PublicKey>,
@@ -1099,17 +1100,17 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 
 	/// Returns the block hash in which our funding transaction was confirmed.
 	pub fn get_funding_tx_confirmed_in(&self) -> Option<BlockHash> {
-		self.funding_tx_confirmed_in
+		self.funding_transaction.get_tx_confirmed_in()
 	}
 
-	/// Returns the current number of confirmations on the funding transaction.
-	pub fn get_funding_tx_confirmations(&self, height: u32) -> u32 {
-		if self.funding_tx_confirmation_height == 0 {
-			// We either haven't seen any confirmation yet, or observed a reorg.
-			return 0;
-		}
+	// /// Returns the current number of confirmations on the funding transaction.
+	// pub fn get_funding_tx_confirmations(&mut self, height: u32) -> Option<u32> {
+	// 	self.funding_transaction.get_tx_confirmations(height)
+	// }
 
-		height.checked_sub(self.funding_tx_confirmation_height).map_or(0, |c| c + 1)
+	/// Returns the current number of confirmations on the funding transaction.
+	pub fn get_funding_tx_confirmations_nocheck(&self, height: u32) -> Option<u32> {
+		self.funding_transaction.get_tx_confirmations_nocheck(height)
 	}
 
 	fn get_holder_selected_contest_delay(&self) -> u16 {
@@ -2034,7 +2035,7 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 	/// Returns the transaction if there is a pending funding transaction that is yet to be
 	/// broadcast.
 	pub fn unbroadcasted_funding(&self) -> Option<Transaction> {
-		self.if_unbroadcasted_funding(|| self.funding_transaction.clone())
+		self.if_unbroadcasted_funding(|| self.funding_transaction.get_tx() )
 	}
 
 	/// Returns the transaction ID if there is a pending funding transaction that is yet to be
@@ -3891,7 +3892,7 @@ impl<SP: Deref> Channel<SP> where
 		// first received the funding_signed.
 		let mut funding_broadcastable =
 			if self.context.is_outbound() && self.context.channel_state & !STATE_FLAGS >= ChannelState::FundingSent as u32 && self.context.channel_state & ChannelState::WaitingForBatch as u32 == 0 {
-				self.context.funding_transaction.take()
+				self.context.funding_transaction.tx_take()
 			} else { None };
 		// That said, if the funding transaction is already confirmed (ie we're active with a
 		// minimum_depth over 0) don't bother re-broadcasting the confirmed funding tx.
@@ -4919,16 +4920,17 @@ impl<SP: Deref> Channel<SP> where
 		// Called:
 		//  * always when a new block/transactions are confirmed with the new height
 		//  * when funding is signed with a height of 0
-		if self.context.funding_tx_confirmation_height == 0 && self.context.minimum_depth != Some(0) {
+		if self.context.funding_transaction.get_tx_confirmation_height().is_none() && self.context.minimum_depth != Some(0) {
 			return None;
 		}
 
-		let funding_tx_confirmations = height as i64 - self.context.funding_tx_confirmation_height as i64 + 1;
-		if funding_tx_confirmations <= 0 {
-			self.context.funding_tx_confirmation_height = 0;
-		}
+		let funding_tx_confirmations = self.context.funding_transaction.get_tx_confirmations(height);
+		// TODO reset on reorg
+		// if funding_tx_confirmations <= 0 {
+			// self.context.funding_tx_confirmation_height2 = 0;
+		// }
 
-		if funding_tx_confirmations < self.context.minimum_depth.unwrap_or(0) as i64 {
+		if funding_tx_confirmations.unwrap_or(0) < self.context.minimum_depth.unwrap_or(0) as i64 {
 			return None;
 		}
 
@@ -4952,7 +4954,7 @@ impl<SP: Deref> Channel<SP> where
 			// We got a reorg but not enough to trigger a force close, just ignore.
 			false
 		} else {
-			if self.context.funding_tx_confirmation_height != 0 && self.context.channel_state & !STATE_FLAGS < ChannelState::ChannelReady as u32 {
+			if self.context.funding_transaction.get_tx_confirmation_height().is_some() && self.context.channel_state & !STATE_FLAGS < ChannelState::ChannelReady as u32 {
 				// We should never see a funding transaction on-chain until we've received
 				// funding_signed (if we're an outbound channel), or seen funding_generated (if we're
 				// an inbound channel - before that we have no known funding TXID). The fuzzer,
@@ -4997,10 +4999,11 @@ impl<SP: Deref> Channel<SP> where
 	{
 		let mut msgs = (None, None);
 		if let Some(funding_txo) = self.context.get_funding_txo() {
+			// assert!(self.context.funding_transaction.is_some());
 			for &(index_in_block, tx) in txdata.iter() {
 				// Check if the transaction is the expected funding transaction, and if it is,
 				// check that it pays the right amount to the right script.
-				if self.context.funding_tx_confirmation_height == 0 {
+				if self.context.funding_transaction.get_tx_confirmation_height().is_none() {
 					if tx.txid() == funding_txo.txid {
 						let txo_idx = funding_txo.index as usize;
 						if txo_idx >= tx.output.len() || tx.output[txo_idx].script_pubkey != self.context.get_funding_redeemscript().to_v0_p2wsh() ||
@@ -5030,8 +5033,10 @@ impl<SP: Deref> Channel<SP> where
 									}
 								}
 							}
-							self.context.funding_tx_confirmation_height = height;
-							self.context.funding_tx_confirmed_in = Some(*block_hash);
+							self.context.funding_transaction.set_txo(funding_txo);
+							self.context.funding_transaction.set_confirmed(*block_hash, height);
+							// self.context.funding_tx_confirmation_height2 = height;
+							// self.context.funding_tx_confirmed_in2 = Some(*block_hash);
 							self.context.short_channel_id = match scid_from_parts(height as u64, index_in_block as u64, txo_idx as u64) {
 								Ok(scid) => Some(scid),
 								Err(_) => panic!("Block was bogus - either height was > 16 million, had > 16 million transactions, or had > 65k outputs"),
@@ -5125,13 +5130,13 @@ impl<SP: Deref> Channel<SP> where
 		let non_shutdown_state = self.context.channel_state & (!MULTI_STATE_FLAGS);
 		if non_shutdown_state & !STATE_FLAGS >= ChannelState::ChannelReady as u32 ||
 		   (non_shutdown_state & ChannelState::OurChannelReady as u32) == ChannelState::OurChannelReady as u32 {
-			let mut funding_tx_confirmations = height as i64 - self.context.funding_tx_confirmation_height as i64 + 1;
-			if self.context.funding_tx_confirmation_height == 0 {
+			let funding_tx_confirmations = self.context.funding_transaction.get_tx_confirmations(height).unwrap_or(0);
+			// if self.context.funding_tx_confirmation_height2 == 0 {
 				// Note that check_get_channel_ready may reset funding_tx_confirmation_height to
 				// zero if it has been reorged out, however in either case, our state flags
 				// indicate we've already sent a channel_ready
-				funding_tx_confirmations = 0;
-			}
+				// funding_tx_confirmations = 0;
+			// }
 
 			// If we've sent channel_ready (or have both sent and received channel_ready), and
 			// the funding transaction has become unconfirmed,
@@ -5142,12 +5147,12 @@ impl<SP: Deref> Channel<SP> where
 			// 0-conf channel, but not doing so may lead to the
 			// `ChannelManager::short_to_chan_info` map  being inconsistent, so we currently have
 			// to.
-			if funding_tx_confirmations == 0 && self.context.funding_tx_confirmed_in.is_some() {
+			if funding_tx_confirmations == 0 && self.context.funding_transaction.get_tx_confirmed_in().is_some() {
 				let err_reason = format!("Funding transaction was un-confirmed. Locked at {} confs, now have {} confs.",
 					self.context.minimum_depth.unwrap(), funding_tx_confirmations);
 				return Err(ClosureReason::ProcessingError { err: err_reason });
 			}
-		} else if !self.context.is_outbound() && self.context.funding_tx_confirmed_in.is_none() &&
+		} else if !self.context.is_outbound() && self.context.funding_transaction.get_tx_confirmed_in().is_none() &&
 				height >= self.context.channel_creation_height + FUNDING_CONF_DEADLINE_BLOCKS {
 			log_info!(logger, "Closing channel {} due to funding timeout", &self.context.channel_id);
 			// If funding_tx_confirmed_in is unset, the channel must not be active
@@ -5166,10 +5171,10 @@ impl<SP: Deref> Channel<SP> where
 	/// force-close the channel, but may also indicate a harmless reorganization of a block or two
 	/// before the channel has reached channel_ready and we can just wait for more blocks.
 	pub fn funding_transaction_unconfirmed<L: Deref>(&mut self, logger: &L) -> Result<(), ClosureReason> where L::Target: Logger {
-		if self.context.funding_tx_confirmation_height != 0 {
+		if self.context.funding_transaction.get_tx_confirmation_height().is_some() {
 			// We handle the funding disconnection by calling best_block_updated with a height one
 			// below where our funding was connected, implying a reorg back to conf_height - 1.
-			let reorg_height = self.context.funding_tx_confirmation_height - 1;
+			let reorg_height = self.context.funding_transaction.get_tx_confirmation_height().unwrap_or(0) - 1;
 			// We use the time field to bump the current time we set on channel updates if its
 			// larger. If we don't know that time has moved forward, we can just set it to the last
 			// time we saw and it will be ignored.
@@ -5242,7 +5247,7 @@ impl<SP: Deref> Channel<SP> where
 		NS::Target: NodeSigner,
 		L::Target: Logger
 	{
-		if self.context.funding_tx_confirmation_height == 0 || self.context.funding_tx_confirmation_height + 5 > best_block_height {
+		if self.context.funding_transaction.get_tx_confirmation_height().is_none() || self.context.funding_transaction.get_tx_confirmation_height().unwrap_or(0) + 5 > best_block_height {
 			return None;
 		}
 
@@ -5353,7 +5358,7 @@ impl<SP: Deref> Channel<SP> where
 		}
 
 		self.context.announcement_sigs = Some((msg.node_signature, msg.bitcoin_signature));
-		if self.context.funding_tx_confirmation_height == 0 || self.context.funding_tx_confirmation_height + 5 > best_block_height {
+		if self.context.funding_transaction.get_tx_confirmation_height().is_none() || self.context.funding_transaction.get_tx_confirmation_height().unwrap_or(0) + 5 > best_block_height {
 			return Err(ChannelError::Ignore(
 				"Got announcement_signatures prior to the required six confirmations - we may not have received a block yet that our peer has".to_owned()));
 		}
@@ -5366,7 +5371,7 @@ impl<SP: Deref> Channel<SP> where
 	pub fn get_signed_channel_announcement<NS: Deref>(
 		&self, node_signer: &NS, chain_hash: ChainHash, best_block_height: u32, user_config: &UserConfig
 	) -> Option<msgs::ChannelAnnouncement> where NS::Target: NodeSigner {
-		if self.context.funding_tx_confirmation_height == 0 || self.context.funding_tx_confirmation_height + 5 > best_block_height {
+		if self.context.funding_transaction.get_tx_confirmation_height().is_none() || self.context.funding_transaction.get_tx_confirmation_height().unwrap_or(0) + 5 > best_block_height {
 			return None;
 		}
 		let announcement = match self.get_channel_announcement(node_signer, chain_hash, user_config) {
@@ -6007,8 +6012,6 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 				closing_fee_limits: None,
 				target_closing_feerate_sats_per_kw: None,
 
-				funding_tx_confirmed_in: None,
-				funding_tx_confirmation_height: 0,
 				short_channel_id: None,
 				channel_creation_height: current_chain_height,
 
@@ -6035,7 +6038,7 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 					funding_outpoint: None,
 					channel_type_features: channel_type.clone()
 				},
-				funding_transaction: None,
+				funding_transaction: ChannelFundingTransactions::new_empty(),
 				is_batch_funding: None,
 
 				counterparty_cur_commitment_point: None,
@@ -6114,7 +6117,7 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 			self.context.minimum_depth = Some(COINBASE_MATURITY);
 		}
 
-		self.context.funding_transaction = Some(funding_transaction);
+		self.context.funding_transaction.set_tx(funding_transaction);
 		self.context.is_batch_funding = Some(()).filter(|_| is_batch_funding);
 
 		let funding_created = self.context.get_funding_created_msg(logger);
@@ -6639,8 +6642,6 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 				closing_fee_limits: None,
 				target_closing_feerate_sats_per_kw: None,
 
-				funding_tx_confirmed_in: None,
-				funding_tx_confirmation_height: 0,
 				short_channel_id: None,
 				channel_creation_height: current_chain_height,
 
@@ -6671,7 +6672,7 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 					funding_outpoint: None,
 					channel_type_features: channel_type.clone()
 				},
-				funding_transaction: None,
+				funding_transaction: ChannelFundingTransactions::new_empty(),
 				is_batch_funding: None,
 
 				counterparty_cur_commitment_point: Some(msg.first_per_commitment_point),
@@ -6817,6 +6818,7 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 
 		let funding_txo = OutPoint { txid: msg.funding_txid, index: msg.funding_output_index };
 		self.context.channel_transaction_parameters.funding_outpoint = Some(funding_txo);
+		// self.context.funding_transaction.set_txo(funding_txo); // TODO ?
 		// This is an externally observable change before we finish all our checks.  In particular
 		// check_funding_created_signature may fail.
 		self.context.holder_signer.as_mut().provide_channel_parameters(&self.context.channel_transaction_parameters);
@@ -7156,8 +7158,6 @@ impl<SP: Deref> Writeable for Channel<SP> where SP::Target: SignerProvider {
 		// consider the stale state on reload.
 		0u8.write(writer)?;
 
-		self.context.funding_tx_confirmed_in.write(writer)?;
-		self.context.funding_tx_confirmation_height.write(writer)?;
 		self.context.short_channel_id.write(writer)?;
 
 		self.context.counterparty_dust_limit_satoshis.write(writer)?;
@@ -7450,8 +7450,6 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 			_ => return Err(DecodeError::InvalidValue),
 		}
 
-		let funding_tx_confirmed_in = Readable::read(reader)?;
-		let funding_tx_confirmation_height = Readable::read(reader)?;
 		let short_channel_id = Readable::read(reader)?;
 
 		let counterparty_dust_limit_satoshis = Readable::read(reader)?;
@@ -7489,7 +7487,7 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 		};
 
 		let mut channel_parameters: ChannelTransactionParameters = Readable::read(reader)?;
-		let funding_transaction: Option<Transaction> = Readable::read(reader)?;
+		let funding_transaction: ChannelFundingTransactions = Readable::read(reader)?;
 
 		let counterparty_cur_commitment_point = Readable::read(reader)?;
 
@@ -7718,8 +7716,6 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 				closing_fee_limits: None,
 				target_closing_feerate_sats_per_kw,
 
-				funding_tx_confirmed_in,
-				funding_tx_confirmation_height,
 				short_channel_id,
 				channel_creation_height: channel_creation_height.unwrap(),
 

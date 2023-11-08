@@ -1738,7 +1738,7 @@ impl ChannelDetails {
 			next_outbound_htlc_minimum_msat: balance.next_outbound_htlc_minimum_msat,
 			user_channel_id: context.get_user_id(),
 			confirmations_required: context.minimum_depth(),
-			confirmations: Some(context.get_funding_tx_confirmations(best_block_height)),
+			confirmations: Some(context.get_funding_tx_confirmations_nocheck(best_block_height).unwrap_or(0)),
 			force_close_spend_delay: context.get_counterparty_selected_contest_delay(),
 			is_outbound: context.is_outbound(),
 			is_channel_ready: context.is_usable(),
@@ -6069,7 +6069,7 @@ where
 					// This covers non-zero-conf inbound `Channel`s that we are currently monitoring, but those
 					// which have not yet had any confirmations on-chain.
 					if !chan.context.is_outbound() && chan.context.minimum_depth().unwrap_or(1) != 0 &&
-						chan.context.get_funding_tx_confirmations(best_block_height) == 0
+						chan.context.funding_transaction.get_tx_confirmations_nocheck(best_block_height).unwrap_or(0) == 0
 					{
 						num_unfunded_channels += 1;
 					}

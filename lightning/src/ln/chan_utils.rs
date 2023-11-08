@@ -19,7 +19,7 @@ use bitcoin::util::address::Payload;
 use bitcoin::hashes::{Hash, HashEngine};
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::ripemd160::Hash as Ripemd160;
-use bitcoin::hash_types::{Txid, PubkeyHash, WPubkeyHash};
+use bitcoin::hash_types::{BlockHash, Txid, PubkeyHash, WPubkeyHash};
 
 use crate::chain::chaininterface::fee_for_weight;
 use crate::chain::package::WEIGHT_REVOKED_OUTPUT;
@@ -856,6 +856,210 @@ pub fn build_anchor_input_witness(funding_key: &PublicKey, funding_sig: &Signatu
 	ret.push_bitcoin_signature(&funding_sig.serialize_der(), EcdsaSighashType::All);
 	ret.push(anchor_redeem_script.as_bytes());
 	ret
+}
+
+pub(crate) struct ChannelFundingTransaction {
+	tx: Option<Transaction>,
+	txo: Option<chain::transaction::OutPoint>,
+	/// The hash of the block in which the funding transaction was included.
+	tx_confirmed_in: Option<BlockHash>,
+	tx_confirmation_height: Option<u32>,
+}
+
+/// Stores into about a funding transaction:
+/// - TX outpoint and/or the full Transaction
+/// - confirmation block/height for confirmed transactions
+impl ChannelFundingTransaction {
+	pub(crate) fn new_empty() -> Self {
+		Self { tx: None, txo: None, tx_confirmed_in: None, tx_confirmation_height: None }
+	}
+
+	pub(crate) fn get_tx(&self) -> Option<&Transaction> { self.tx.as_ref() }
+
+	pub(crate) fn set_tx(&mut self, tx: Transaction) {
+		self.tx = Some(tx);
+	}
+
+	pub(crate) fn set_txo(&mut self, txo: chain::transaction::OutPoint) {
+		self.txo = Some(txo);
+	}
+
+	pub(crate) fn is_confirmed(&self) -> bool {
+		self.tx_confirmation_height.is_some() && self.tx_confirmed_in.is_some()
+	}
+
+	/// Returns the current number of confirmations
+	pub(crate) fn get_tx_confirmations(&mut self, height: u32) -> Option<i64> {
+		match self.tx_confirmation_height {
+			// We either haven't seen any confirmation yet, or observed a reorg.
+			None => None,
+			Some(h) => {
+				let confs = height as i64 - h as i64 + 1;
+				// Reset on reorg
+				if confs <= 0 {
+					self.tx_confirmation_height = None;
+				} 
+				Some(confs)
+			}
+		}
+	}
+
+	/// Returns the current number of confirmations
+	pub(crate) fn get_tx_confirmations_nocheck(&self, height: u32) -> Option<u32> {
+		match self.tx_confirmation_height {
+			// We either haven't seen any confirmation yet, or observed a reorg.
+			None => None,
+			Some(h) => height.checked_sub(h).map(|c| c + 1)
+		}
+	}
+
+	fn set_confirmed(&mut self, block_hash: BlockHash, block_height: u32) {
+		// TODO check if confirmed already
+		self.tx_confirmed_in = Some(block_hash);
+		self.tx_confirmation_height = Some(block_height);
+	}
+
+	// fn reset_unconfirmed(&mut self) {
+	// 	self.tx_confirmed_in = None;
+	// 	self.tx_confirmation_height = None;
+	// }
+
+	pub(crate) fn get_tx_confirmed_in(&self) -> Option<BlockHash> { self.tx_confirmed_in }
+	pub(crate) fn get_tx_confirmation_height(&self) -> Option<u32> { self.tx_confirmation_height }
+}
+
+impl Writeable for ChannelFundingTransaction {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), io::Error> {
+		self.tx.write(writer)?;
+		self.txo.write(writer)?;
+		self.tx_confirmed_in.write(writer)?;
+		self.tx_confirmation_height.write(writer)?;
+		Ok(())
+	}
+}
+
+impl Readable for ChannelFundingTransaction {
+	fn read<R: io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let tx = Readable::read(reader)?;
+		let txo = Readable::read(reader)?;
+		let tx_confirmed_in = Readable::read(reader)?;
+		let tx_confirmation_height = Readable::read(reader)?;
+		Ok(Self { tx, txo, tx_confirmed_in, tx_confirmation_height })
+	}
+}
+
+/// Stores info about zero or one funding transaction:
+/// - none in case of unfunded channels
+///   1 in case of funded channels (can be uncofirmed or confirmed)
+/// It is prepared to handle multiple funding transaction candidates (e.g. in case of Splicing)
+pub(crate) struct ChannelFundingTransactions {
+	tx: Option<ChannelFundingTransaction>,
+}
+
+impl ChannelFundingTransactions {
+	pub(crate) fn new_empty() -> Self {
+		Self { tx: None }
+	}
+
+	pub(crate) fn is_some(&self) -> bool {
+		self.tx.is_some()
+	}
+
+	pub(crate) fn set_tx(&mut self, tx: Transaction) {
+		if let Some(cft) = self.tx.as_mut() {
+			cft.set_tx(tx);
+		} else {
+			let mut cft = ChannelFundingTransaction::new_empty();
+			cft.set_tx(tx);
+			self.tx = Some(cft);
+		}
+	}
+
+	pub(crate) fn set_txo(&mut self, txo: chain::transaction::OutPoint) {
+		if let Some(cft) = self.tx.as_mut() {
+			cft.set_txo(txo);
+		} else {
+			let mut cft = ChannelFundingTransaction::new_empty();
+			cft.set_txo(txo);
+			self.tx = Some(cft);
+		}
+	}
+
+	pub(crate) fn is_confirmed(&self) -> bool {
+		self.tx.as_ref().map_or(false, |tx| tx.is_confirmed())
+		// match &self.tx {
+		// 	None => false,
+		// 	Some(tx) => tx.is_confirmed(),
+		// }
+	}
+
+	pub(crate) fn is_unconfirmed(&self) -> bool {
+		self.tx.as_ref().map_or(true, |tx| !tx.is_confirmed())
+	}
+
+	pub(crate) fn set_confirmed(&mut self, block_hash: BlockHash, block_height: u32) {
+		if let Some(tx) = self.tx.as_mut() {
+			tx.set_confirmed(block_hash, block_height);
+		} else {
+			panic!("Set_confirmed() invoked, but there is no funding tx!");
+		}
+	}
+
+	pub(crate) fn get_tx(&self) -> Option<Transaction> {
+		match &self.tx {
+			None => None,
+			Some(tx) => match tx.get_tx() {
+				None => None,
+				Some(tx) => Some(tx.clone()),
+			}
+		}
+	}
+
+	pub(crate) fn tx_take(&mut self) -> Option<Transaction> {
+		match self.tx.take() {
+			None => None,
+			Some(tx) => match tx.get_tx() {
+				None => None,
+				Some(tx) => Some(tx.clone())
+			}
+		}
+	}
+
+	/// Returns the block hash in the funding transaction was confirmed.
+	pub(crate) fn get_tx_confirmed_in(&self) -> Option<BlockHash> {
+		match &self.tx {
+			None => None,
+			Some(tx) => tx.get_tx_confirmed_in(),
+		}
+	}
+
+	pub(crate) fn get_tx_confirmation_height(&self) -> Option<u32> {
+		self.tx.as_ref().map_or(None, |tx| tx.get_tx_confirmation_height())
+	}
+
+	/// Returns the current number of confirmations
+	pub(crate) fn get_tx_confirmations(&mut self, height: u32) -> Option<i64> {
+		self.tx.as_mut().map_or(None, |tx| tx.get_tx_confirmations(height))
+	}
+
+	/// Returns the current number of confirmations
+	pub(crate) fn get_tx_confirmations_nocheck(&self, height: u32) -> Option<u32> {
+		self.tx.as_ref().map_or(None, |tx| tx.get_tx_confirmations_nocheck(height))
+	}
+}
+
+impl Writeable for ChannelFundingTransactions {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), io::Error> {
+		self.tx.write(writer)?;
+		Ok(())
+	}
+}
+
+impl Readable for ChannelFundingTransactions {
+	fn read<R: io::Read>(reader: &mut R) -> Result<Self, DecodeError> {
+		let tx = Readable::read(reader)?;
+		Ok(Self { tx })
+	}
 }
 
 /// Per-channel data used to build transactions in conjunction with the per-commitment data (CommitmentTransaction).
