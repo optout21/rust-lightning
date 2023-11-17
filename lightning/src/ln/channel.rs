@@ -686,8 +686,8 @@ impl UnfundedChannelContext {
 	}
 }
 
-#[derive(Default)]
 /// Info about a transaction and its confirmation status, used mainly for funding transactions.
+#[derive(Default)]
 struct TransactionConfirmation {
 	/// The transaction, or None.
 	transaction: Option<Transaction>,
@@ -700,7 +700,7 @@ struct TransactionConfirmation {
 /// Confirmation depth: height relative to a current height.
 #[derive(Debug, PartialEq)]
 enum RelativeConfirmationDepth {
-	/// If fhere is no confirmation height (it was not confirmed, or confirmed and reorged).
+	/// If fhere is no confirmation height (it was not confirmed, or confirmed then reorg'd).
 	Unconfirmed,
 	/// Confirmed by N blokcks, current_height - confirmation_height + 1; a number always larger than 0.
 	Confirmed(u32),
@@ -4997,8 +4997,8 @@ impl<SP: Deref> Channel<SP> where
 
 		let confirmation_depth = self.context.funding_tx_confirmation.confirmation_depth(height);
 		if confirmation_depth == RelativeConfirmationDepth::ConfirmedInFuture {
-				// reset to unconfirmed
-				self.context.funding_tx_confirmation.confirmation_height = 0;
+			// reset to unconfirmed
+			self.context.funding_tx_confirmation.confirmation_height = 0;
 		}
 		if !confirmation_depth.is_confirmed_for(self.context.minimum_depth) {
 			return None;
