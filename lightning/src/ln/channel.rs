@@ -698,11 +698,27 @@ pub(super) struct TransactionConfirmation {
 
 impl TransactionConfirmation {
 	/// Construct with empty values
-	pub(super) fn default() -> Self {
+	fn default() -> Self {
 		Self {
 			transaction: None,
 			confirmed_in: None,
 			confirmation_height: 0,
+		}
+	}
+
+	/// Get the confirmation depth: height relative to the given current height.
+	/// Also returns a flag indicating the special case when the confirmation is in the 'future'.
+	/// If there is no confirmation height (it was not confirmed, or confirmed and reorged): (0, false)
+	/// If the confirmation height is in the 'future' (e.g. due to a reorg): (0, true)
+	/// Otherwise the result is height - confirmation_height + 1, a number always larger than 0.
+	fn confirmation_depth(&self, current_height: u32) -> (u32, bool) {
+		if self.confirmation_height == 0 {
+			(0, false)
+		} else {
+			match current_height.checked_sub(self.confirmation_height) {
+				None => (0, true),
+				Some(d) => (d + 1, false),
+			}
 		}
 	}
 }
@@ -1137,12 +1153,7 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 
 	/// Returns the current number of confirmations on the funding transaction.
 	pub fn get_funding_tx_confirmations(&self, height: u32) -> u32 {
-		if self.funding_tx_confirmation.confirmation_height == 0 {
-			// We either haven't seen any confirmation yet, or observed a reorg.
-			return 0;
-		}
-
-		height.checked_sub(self.funding_tx_confirmation.confirmation_height).map_or(0, |c| c + 1)
+		self.funding_tx_confirmation.confirmation_depth(height).0
 	}
 
 	fn get_holder_selected_contest_delay(&self) -> u16 {
@@ -4954,12 +4965,12 @@ impl<SP: Deref> Channel<SP> where
 			return None;
 		}
 
-		let funding_tx_confirmations = height as i64 - self.context.funding_tx_confirmation.confirmation_height as i64 + 1;
-		if funding_tx_confirmations <= 0 {
+		let (funding_tx_confirmations, in_future) = self.context.funding_tx_confirmation.confirmation_depth(height);
+		if in_future {
 			self.context.funding_tx_confirmation.confirmation_height = 0;
 		}
 
-		if funding_tx_confirmations < self.context.minimum_depth.unwrap_or(0) as i64 {
+		if funding_tx_confirmations < self.context.minimum_depth.unwrap_or(0) {
 			return None;
 		}
 
@@ -5156,13 +5167,10 @@ impl<SP: Deref> Channel<SP> where
 		let non_shutdown_state = self.context.channel_state & (!MULTI_STATE_FLAGS);
 		if non_shutdown_state & !STATE_FLAGS >= ChannelState::ChannelReady as u32 ||
 		   (non_shutdown_state & ChannelState::OurChannelReady as u32) == ChannelState::OurChannelReady as u32 {
-			let mut funding_tx_confirmations = height as i64 - self.context.funding_tx_confirmation.confirmation_height as i64 + 1;
-			if self.context.funding_tx_confirmation.confirmation_height == 0 {
-				// Note that check_get_channel_ready may reset funding_tx_confirmation.confirmation_height to
-				// zero if it has been reorged out, however in either case, our state flags
-				// indicate we've already sent a channel_ready
-				funding_tx_confirmations = 0;
-			}
+			let (funding_tx_confirmations, _) = self.context.funding_tx_confirmation.confirmation_depth(height);
+			// Note that check_get_channel_ready may reset funding_tx_confirmation.confirmation_height to
+			// zero if it has been reorged out, however in either case, our state flags
+			// indicate we've already sent a channel_ready
 
 			// If we've sent channel_ready (or have both sent and received channel_ready), and
 			// the funding transaction has become unconfirmed,
@@ -5197,7 +5205,7 @@ impl<SP: Deref> Channel<SP> where
 	/// force-close the channel, but may also indicate a harmless reorganization of a block or two
 	/// before the channel has reached channel_ready and we can just wait for more blocks.
 	pub fn funding_transaction_unconfirmed<L: Deref>(&mut self, logger: &L) -> Result<(), ClosureReason> where L::Target: Logger {
-		if self.context.funding_tx_confirmation.confirmation_height != 0 {
+		if self.context.funding_tx_confirmation.confirmation_height > 0 {
 			// We handle the funding disconnection by calling best_block_updated with a height one
 			// below where our funding was connected, implying a reorg back to conf_height - 1.
 			let reorg_height = self.context.funding_tx_confirmation.confirmation_height - 1;
@@ -7816,7 +7824,7 @@ mod tests {
 	use crate::ln::PaymentHash;
 	use crate::ln::channelmanager::{self, HTLCSource, PaymentId};
 	use crate::ln::channel::InitFeatures;
-	use crate::ln::channel::{ChannelState, InboundHTLCOutput, OutboundV1Channel, InboundV1Channel, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator, commit_tx_fee_msat};
+	use crate::ln::channel::{ChannelState, InboundHTLCOutput, OutboundV1Channel, InboundV1Channel, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator, TransactionConfirmation, commit_tx_fee_msat};
 	use crate::ln::channel::{MAX_FUNDING_SATOSHIS_NO_WUMBO, TOTAL_BITCOIN_SUPPLY_SATOSHIS, MIN_THEIR_CHAN_RESERVE_SATOSHIS};
 	use crate::ln::features::ChannelTypeFeatures;
 	use crate::ln::msgs::{ChannelUpdate, DecodeError, UnsignedChannelUpdate, MAX_VALUE_MSAT};
@@ -7858,6 +7866,26 @@ mod tests {
 		        "MAX_FUNDING_SATOSHIS_NO_WUMBO is greater than all satoshis in existence");
 	}
 
+	#[test]
+	fn test_transaction_confirmation_depth() {
+		{
+			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 0 };
+			assert_eq!(tx_conf.confirmation_depth(42), (0, false));
+		}
+		{
+			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 100005 };
+			assert_eq!(tx_conf.confirmation_depth(100008), (4, false));
+		}
+		{
+			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 100005 };
+			assert_eq!(tx_conf.confirmation_depth(100005), (1, false));
+		}
+		{
+			// confirmation_height is larger than current, 'in the future'
+			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 100005 };
+			assert_eq!(tx_conf.confirmation_depth(100000), (0, true));
+		}
+	}
 	struct Keys {
 		signer: InMemorySigner,
 	}
