@@ -716,14 +716,22 @@ impl RelativeConfirmationDepth {
 
 	/// Check if confirmed for a desired mimimum depth
 	fn is_confirmed_for(&self, min_depth: Option<u32>) -> bool {
-		if min_depth.unwrap_or(0) == 0 {
-			// confirmation not needed
-			true
-		} else {
-			if let Self::Confirmed(d) = self {
-				*d >= min_depth.unwrap_or(0)
-			} else {
+		match min_depth {
+			None => {
+				// min depth is unset
 				false
+			},
+			Some(min_depth) => {
+				if min_depth == 0 {
+					// confirmation not needed
+					true
+				} else {
+					if let Self::Confirmed(depth) = self {
+						*depth >= min_depth
+					} else {
+						false
+					}
+				}
 			}
 		}
 	}
@@ -7951,12 +7959,12 @@ mod tests {
 			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(Some(0)), true);
 		}
 		{
-			assert_eq!(RelativeConfirmationDepth::Confirmed(1).is_confirmed_for(None), true);
-			assert_eq!(RelativeConfirmationDepth::Confirmed(2).is_confirmed_for(None), true);
-			assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed_for(None), true);
-			assert_eq!(RelativeConfirmationDepth::Confirmed(4).is_confirmed_for(None), true);
-			assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed_for(None), true);
-			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(None), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(1).is_confirmed_for(None), false);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(2).is_confirmed_for(None), false);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed_for(None), false);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(4).is_confirmed_for(None), false);
+			assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed_for(None), false);
+			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(None), false);
 		}
 	}
 
