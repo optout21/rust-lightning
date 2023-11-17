@@ -4999,10 +4999,6 @@ impl<SP: Deref> Channel<SP> where
 		//  * when funding is signed with a height of 0
 
 		// Check confirmation status
-		if self.context.funding_tx_confirmation.confirmation_height == 0 && self.context.minimum_depth != Some(0) {
-			return None;
-		}
-
 		let confirmation_depth = self.context.funding_tx_confirmation.confirmation_depth(height);
 		if confirmation_depth == RelativeConfirmationDepth::ConfirmedInFuture {
 			// reset to unconfirmed
