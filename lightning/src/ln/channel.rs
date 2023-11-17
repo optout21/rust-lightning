@@ -686,8 +686,9 @@ impl UnfundedChannelContext {
 	}
 }
 
+#[derive(Default)]
 /// Info about a transaction and its confirmation status, used mainly for funding transactions.
-pub(super) struct TransactionConfirmation {
+struct TransactionConfirmation {
 	/// The transaction, or None.
 	transaction: Option<Transaction>,
 	/// The hash of the block in which the transaction was included, or None.
@@ -696,28 +697,55 @@ pub(super) struct TransactionConfirmation {
 	confirmation_height: u32,
 }
 
-impl TransactionConfirmation {
-	/// Construct with empty values
-	fn default() -> Self {
-		Self {
-			transaction: None,
-			confirmed_in: None,
-			confirmation_height: 0,
+/// Confirmation depth: height relative to a current height.
+#[derive(Debug, PartialEq)]
+enum RelativeConfirmationDepth {
+	/// If fhere is no confirmation height (it was not confirmed, or confirmed and reorged).
+	Unconfirmed,
+	/// Confirmed by N blokcks, current_height - confirmation_height + 1; a number always larger than 0.
+	Confirmed(u32),
+	/// If the confirmation height is in the 'future' (e.g. due to a reorg).
+	ConfirmedInFuture,
+}
+
+impl RelativeConfirmationDepth {
+	/// Check if confirmed
+	fn is_confirmed(&self) -> bool {
+		matches!(self, Self::Confirmed(_d))
+	}
+
+	/// Check if confirmed for a desired mimimum depth
+	fn is_confirmed_for(&self, min_depth: Option<u32>) -> bool {
+		if min_depth.unwrap_or(0) == 0 {
+			// confirmation not needed
+			true
+		} else {
+			if let Self::Confirmed(d) = self {
+				*d >= min_depth.unwrap_or(0)
+			} else {
+				false
+			}
 		}
 	}
 
+	/// Return a single number: the depth, or 0 for unconfirmed (or confirmed in future)
+	fn num(&self) -> u32 {
+		match self {
+			Self::Unconfirmed | Self::ConfirmedInFuture => 0,
+			Self::Confirmed(d) => *d,
+		}
+	}
+}
+
+impl TransactionConfirmation {
 	/// Get the confirmation depth: height relative to the given current height.
-	/// Also returns a flag indicating the special case when the confirmation is in the 'future'.
-	/// If there is no confirmation height (it was not confirmed, or confirmed and reorged): (0, false)
-	/// If the confirmation height is in the 'future' (e.g. due to a reorg): (0, true)
-	/// Otherwise the result is height - confirmation_height + 1, a number always larger than 0.
-	fn confirmation_depth(&self, current_height: u32) -> (u32, bool) {
+	fn confirmation_depth(&self, current_height: u32) -> RelativeConfirmationDepth {
 		if self.confirmation_height == 0 {
-			(0, false)
+			RelativeConfirmationDepth::Unconfirmed
 		} else {
 			match current_height.checked_sub(self.confirmation_height) {
-				None => (0, true),
-				Some(d) => (d + 1, false),
+				None => RelativeConfirmationDepth::ConfirmedInFuture,
+				Some(d) => RelativeConfirmationDepth::Confirmed(d + 1),
 			}
 		}
 	}
@@ -1153,7 +1181,7 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 
 	/// Returns the current number of confirmations on the funding transaction.
 	pub fn get_funding_tx_confirmations(&self, height: u32) -> u32 {
-		self.funding_tx_confirmation.confirmation_depth(height).0
+		self.funding_tx_confirmation.confirmation_depth(height).num()
 	}
 
 	fn get_holder_selected_contest_delay(&self) -> u16 {
@@ -4961,16 +4989,18 @@ impl<SP: Deref> Channel<SP> where
 		// Called:
 		//  * always when a new block/transactions are confirmed with the new height
 		//  * when funding is signed with a height of 0
+
+		// Check confirmation status
 		if self.context.funding_tx_confirmation.confirmation_height == 0 && self.context.minimum_depth != Some(0) {
 			return None;
 		}
 
-		let (funding_tx_confirmations, in_future) = self.context.funding_tx_confirmation.confirmation_depth(height);
-		if in_future {
-			self.context.funding_tx_confirmation.confirmation_height = 0;
+		let confirmation_depth = self.context.funding_tx_confirmation.confirmation_depth(height);
+		if confirmation_depth == RelativeConfirmationDepth::ConfirmedInFuture {
+				// reset to unconfirmed
+				self.context.funding_tx_confirmation.confirmation_height = 0;
 		}
-
-		if funding_tx_confirmations < self.context.minimum_depth.unwrap_or(0) {
+		if !confirmation_depth.is_confirmed_for(self.context.minimum_depth) {
 			return None;
 		}
 
@@ -5167,7 +5197,7 @@ impl<SP: Deref> Channel<SP> where
 		let non_shutdown_state = self.context.channel_state & (!MULTI_STATE_FLAGS);
 		if non_shutdown_state & !STATE_FLAGS >= ChannelState::ChannelReady as u32 ||
 		   (non_shutdown_state & ChannelState::OurChannelReady as u32) == ChannelState::OurChannelReady as u32 {
-			let (funding_tx_confirmations, _) = self.context.funding_tx_confirmation.confirmation_depth(height);
+			let confirmation_depth = self.context.funding_tx_confirmation.confirmation_depth(height);
 			// Note that check_get_channel_ready may reset funding_tx_confirmation.confirmation_height to
 			// zero if it has been reorged out, however in either case, our state flags
 			// indicate we've already sent a channel_ready
@@ -5181,9 +5211,9 @@ impl<SP: Deref> Channel<SP> where
 			// 0-conf channel, but not doing so may lead to the
 			// `ChannelManager::short_to_chan_info` map  being inconsistent, so we currently have
 			// to.
-			if funding_tx_confirmations == 0 && self.context.funding_tx_confirmation.confirmed_in.is_some() {
-				let err_reason = format!("Funding transaction was un-confirmed. Locked at {} confs, now have {} confs.",
-					self.context.minimum_depth.unwrap(), funding_tx_confirmations);
+			if !confirmation_depth.is_confirmed() && self.context.funding_tx_confirmation.confirmed_in.is_some() {
+				let err_reason = format!("Funding transaction was un-confirmed. Locked at {} confs, now have {:?} confs.",
+					self.context.minimum_depth.unwrap(), confirmation_depth);
 				return Err(ClosureReason::ProcessingError { err: err_reason });
 			}
 		} else if !self.context.is_outbound() && self.context.funding_tx_confirmation.confirmed_in.is_none() &&
@@ -7824,7 +7854,7 @@ mod tests {
 	use crate::ln::PaymentHash;
 	use crate::ln::channelmanager::{self, HTLCSource, PaymentId};
 	use crate::ln::channel::InitFeatures;
-	use crate::ln::channel::{ChannelState, InboundHTLCOutput, OutboundV1Channel, InboundV1Channel, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator, TransactionConfirmation, commit_tx_fee_msat};
+	use crate::ln::channel::{ChannelState, InboundHTLCOutput, OutboundV1Channel, InboundV1Channel, OutboundHTLCOutput, InboundHTLCState, OutboundHTLCState, HTLCCandidate, HTLCInitiator, RelativeConfirmationDepth, TransactionConfirmation, commit_tx_fee_msat};
 	use crate::ln::channel::{MAX_FUNDING_SATOSHIS_NO_WUMBO, TOTAL_BITCOIN_SUPPLY_SATOSHIS, MIN_THEIR_CHAN_RESERVE_SATOSHIS};
 	use crate::ln::features::ChannelTypeFeatures;
 	use crate::ln::msgs::{ChannelUpdate, DecodeError, UnsignedChannelUpdate, MAX_VALUE_MSAT};
@@ -7870,22 +7900,73 @@ mod tests {
 	fn test_transaction_confirmation_depth() {
 		{
 			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 0 };
-			assert_eq!(tx_conf.confirmation_depth(42), (0, false));
+			assert_eq!(tx_conf.confirmation_depth(42), RelativeConfirmationDepth::Unconfirmed);
 		}
 		{
 			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 100005 };
-			assert_eq!(tx_conf.confirmation_depth(100008), (4, false));
+			assert_eq!(tx_conf.confirmation_depth(100008), RelativeConfirmationDepth::Confirmed(4));
 		}
 		{
 			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 100005 };
-			assert_eq!(tx_conf.confirmation_depth(100005), (1, false));
+			assert_eq!(tx_conf.confirmation_depth(100005), RelativeConfirmationDepth::Confirmed(1));
 		}
 		{
 			// confirmation_height is larger than current, 'in the future'
 			let tx_conf = TransactionConfirmation { transaction: None, confirmed_in: None, confirmation_height: 100005 };
-			assert_eq!(tx_conf.confirmation_depth(100000), (0, true));
+			assert_eq!(tx_conf.confirmation_depth(100000), RelativeConfirmationDepth::ConfirmedInFuture);
 		}
 	}
+
+	#[test]
+	fn test_relative_confirmation_height_is_confirmed() {
+		assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed(), true);
+		assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed(), false);
+		assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed(), false);
+	}
+
+	#[test]
+	fn test_relative_confirmation_height_is_confirmed_for() {
+		{
+			assert_eq!(RelativeConfirmationDepth::Confirmed(1).is_confirmed_for(Some(3)), false);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(2).is_confirmed_for(Some(3)), false);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed_for(Some(3)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(4).is_confirmed_for(Some(3)), true);
+			assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed_for(Some(3)), false);
+			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(Some(3)), false);
+		}
+		{
+			assert_eq!(RelativeConfirmationDepth::Confirmed(1).is_confirmed_for(Some(1)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(2).is_confirmed_for(Some(1)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed_for(Some(1)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(4).is_confirmed_for(Some(1)), true);
+			assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed_for(Some(1)), false);
+			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(Some(1)), false);
+		}
+		{
+			assert_eq!(RelativeConfirmationDepth::Confirmed(1).is_confirmed_for(Some(0)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(2).is_confirmed_for(Some(0)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed_for(Some(0)), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(4).is_confirmed_for(Some(0)), true);
+			assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed_for(Some(0)), true);
+			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(Some(0)), true);
+		}
+		{
+			assert_eq!(RelativeConfirmationDepth::Confirmed(1).is_confirmed_for(None), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(2).is_confirmed_for(None), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(3).is_confirmed_for(None), true);
+			assert_eq!(RelativeConfirmationDepth::Confirmed(4).is_confirmed_for(None), true);
+			assert_eq!(RelativeConfirmationDepth::Unconfirmed.is_confirmed_for(None), true);
+			assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.is_confirmed_for(None), true);
+		}
+	}
+
+	#[test]
+	fn test_relative_confirmation_height_num() {
+		assert_eq!(RelativeConfirmationDepth::Confirmed(3).num(), 3);
+		assert_eq!(RelativeConfirmationDepth::Unconfirmed.num(), 0);
+		assert_eq!(RelativeConfirmationDepth::ConfirmedInFuture.num(), 0);
+	}
+
 	struct Keys {
 		signer: InMemorySigner,
 	}
