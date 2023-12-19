@@ -548,6 +548,7 @@ struct MsgHandleErrInternal {
 	chan_id: Option<(ChannelId, u128)>, // If Some a channel of ours has been closed
 	shutdown_finish: Option<(ShutdownResult, Option<msgs::ChannelUpdate>)>,
 	channel_capacity: Option<u64>,
+	channel_funding_txo: Option<OutPoint>,
 }
 impl MsgHandleErrInternal {
 	#[inline]
@@ -565,14 +566,17 @@ impl MsgHandleErrInternal {
 			chan_id: None,
 			shutdown_finish: None,
 			channel_capacity: None,
+			channel_funding_txo: None,
 		}
 	}
 	#[inline]
 	fn from_no_close(err: msgs::LightningError) -> Self {
-		Self { err, chan_id: None, shutdown_finish: None, channel_capacity: None }
+		Self { err, chan_id: None, shutdown_finish: None, channel_capacity: None, channel_funding_txo: None }
 	}
 	#[inline]
-	fn from_finish_shutdown(err: String, channel_id: ChannelId, user_channel_id: u128, shutdown_res: ShutdownResult, channel_update: Option<msgs::ChannelUpdate>, channel_capacity: u64) -> Self {
+	fn from_finish_shutdown<SP: Deref>(err: String, channel_id: ChannelId, shutdown_res: ShutdownResult, channel_update: Option<msgs::ChannelUpdate>, channel_context: &ChannelContext<SP>) -> Self
+	where SP::Target: SignerProvider
+	{
 		let err_msg = msgs::ErrorMessage { channel_id, data: err.clone() };
 		let action = if shutdown_res.monitor_update.is_some() {
 			// We have a closing `ChannelMonitorUpdate`, which means the channel was funded and we
@@ -584,9 +588,10 @@ impl MsgHandleErrInternal {
 		};
 		Self {
 			err: LightningError { err, action },
-			chan_id: Some((channel_id, user_channel_id)),
+			chan_id: Some((channel_id, channel_context.get_user_id())),
 			shutdown_finish: Some((shutdown_res, channel_update)),
-			channel_capacity: Some(channel_capacity)
+			channel_capacity: Some(channel_context.get_value_satoshis()),
+			channel_funding_txo: channel_context.get_funding_txo(),
 		}
 	}
 	#[inline]
@@ -620,6 +625,7 @@ impl MsgHandleErrInternal {
 			chan_id: None,
 			shutdown_finish: None,
 			channel_capacity: None,
+			channel_funding_txo: None,
 		}
 	}
 
@@ -1956,7 +1962,7 @@ macro_rules! handle_error {
 
 		match $internal {
 			Ok(msg) => Ok(msg),
-			Err(MsgHandleErrInternal { err, chan_id, shutdown_finish, channel_capacity }) => {
+			Err(MsgHandleErrInternal { err, chan_id, shutdown_finish, channel_capacity, channel_funding_txo }) => {
 				let mut msg_events = Vec::with_capacity(2);
 
 				if let Some((shutdown_res, update_option)) = shutdown_finish {
@@ -1972,6 +1978,7 @@ macro_rules! handle_error {
 							reason: ClosureReason::ProcessingError { err: err.err.clone() },
 							counterparty_node_id: Some($counterparty_node_id),
 							channel_capacity_sats: channel_capacity,
+							channel_funding_txo: channel_funding_txo,
 						}, None));
 					}
 				}
@@ -2040,11 +2047,9 @@ macro_rules! convert_chan_phase_err {
 				log_error!(logger, "Closing channel {} due to close-required error: {}", $channel_id, msg);
 				update_maps_on_chan_removal!($self, $channel.context);
 				let shutdown_res = $channel.context.force_shutdown(true);
-				let user_id = $channel.context.get_user_id();
-				let channel_capacity_satoshis = $channel.context.get_value_satoshis();
 
-				(true, MsgHandleErrInternal::from_finish_shutdown(msg, *$channel_id, user_id,
-					shutdown_res, $channel_update, channel_capacity_satoshis))
+				(true, MsgHandleErrInternal::from_finish_shutdown(msg, *$channel_id,
+					shutdown_res, $channel_update, &$channel.context))
 			},
 		}
 	};
@@ -2718,6 +2723,7 @@ where
 			reason: closure_reason,
 			counterparty_node_id: Some(context.get_counterparty_node_id()),
 			channel_capacity_sats: Some(context.get_value_satoshis()),
+			channel_funding_txo: context.get_funding_txo(),
 		}, None));
 	}
 
@@ -3757,11 +3763,9 @@ where
 				let logger = WithChannelContext::from(&self.logger, &chan.context);
 				let funding_res = chan.get_funding_created(funding_transaction, funding_txo, is_batch_funding, &&logger)
 					.map_err(|(mut chan, e)| if let ChannelError::Close(msg) = e {
-						let channel_id = chan.context.channel_id();
-						let user_id = chan.context.get_user_id();
 						let shutdown_res = chan.context.force_shutdown(false);
-						let channel_capacity = chan.context.get_value_satoshis();
-						(chan, MsgHandleErrInternal::from_finish_shutdown(msg, channel_id, user_id, shutdown_res, None, channel_capacity))
+						let err_msg = MsgHandleErrInternal::from_finish_shutdown(msg, chan.context.channel_id(), shutdown_res, None, &chan.context);
+						(chan, err_msg)
 					} else { unreachable!(); });
 				match funding_res {
 					Ok(funding_msg) => (chan, funding_msg),
@@ -10308,6 +10312,7 @@ where
 						reason: ClosureReason::OutdatedChannelManager,
 						counterparty_node_id: Some(channel.context.get_counterparty_node_id()),
 						channel_capacity_sats: Some(channel.context.get_value_satoshis()),
+						channel_funding_txo: channel.context.get_funding_txo(),
 					}, None));
 					for (channel_htlc_source, payment_hash) in channel.inflight_htlc_sources() {
 						let mut found_htlc = false;
@@ -10361,6 +10366,7 @@ where
 					reason: ClosureReason::DisconnectedPeer,
 					counterparty_node_id: Some(channel.context.get_counterparty_node_id()),
 					channel_capacity_sats: Some(channel.context.get_value_satoshis()),
+					channel_funding_txo: channel.context.get_funding_txo(),
 				}, None));
 			} else {
 				log_error!(logger, "Missing ChannelMonitor for channel {} needed by ChannelManager.", &channel.context.channel_id());

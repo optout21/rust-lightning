@@ -1534,6 +1534,7 @@ pub struct ExpectedCloseEvent {
 	pub counterparty_node_id: Option<PublicKey>,
 	pub discard_funding: bool,
 	pub reason: Option<ClosureReason>,
+	pub channel_funding_txo: Option<OutPoint>,
 }
 
 impl ExpectedCloseEvent {
@@ -1544,6 +1545,7 @@ impl ExpectedCloseEvent {
 			counterparty_node_id: None,
 			discard_funding,
 			reason: Some(reason),
+			channel_funding_txo: None,
 		}
 	}
 }
@@ -1562,12 +1564,14 @@ pub fn check_closed_events(node: &Node, expected_close_events: &[ExpectedCloseEv
 				reason,
 				counterparty_node_id,
 				channel_capacity_sats,
+				channel_funding_txo,
 				..
 			} if (
 				expected_event.channel_id.map(|expected| *channel_id == expected).unwrap_or(true) &&
 				expected_event.reason.as_ref().map(|expected| reason == expected).unwrap_or(true) &&
 				expected_event.counterparty_node_id.map(|expected| *counterparty_node_id == Some(expected)).unwrap_or(true) &&
-				expected_event.channel_capacity_sats.map(|expected| *channel_capacity_sats == Some(expected)).unwrap_or(true)
+				expected_event.channel_capacity_sats.map(|expected| *channel_capacity_sats == Some(expected)).unwrap_or(true) &&
+				expected_event.channel_funding_txo.map(|expected| *channel_funding_txo == Some(expected)).unwrap_or(true)
 			)
 		)));
 	}
@@ -1592,6 +1596,7 @@ pub fn check_closed_event(node: &Node, events_count: usize, expected_reason: Clo
 		counterparty_node_id: Some(*node_id),
 		discard_funding: is_check_discard_funding,
 		reason: Some(expected_reason.clone()),
+		channel_funding_txo: None,
 	}).collect::<Vec<_>>();
 	check_closed_events(node, expected_close_events.as_slice());
 }
