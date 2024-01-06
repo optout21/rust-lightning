@@ -977,6 +977,23 @@ pub enum Event {
 	///
 	/// [`ChannelHandshakeConfig::negotiate_anchors_zero_fee_htlc_tx`]: crate::util::config::ChannelHandshakeConfig::negotiate_anchors_zero_fee_htlc_tx
 	BumpTransaction(BumpTransactionEvent),
+	/// #SPLICING
+	/// Indicates that the splice negotiation is done, `splice_ack` msg was received
+	/// TODO Change name, this should come after tx negotiation, maybe not needed in this form
+	SpliceAcked {
+		/// The channel_id of the channel where the splice was initiated
+		channel_id: ChannelId,
+		/// The counterparty's node_id
+		counterparty_node_id: PublicKey,
+		/// The current funding TX outpoint, which must be an input to the new splice TX
+		current_funding_outpoint: OutPoint,
+		/// The pre-splice channel value, in satoshis.
+		pre_channel_value_satoshis: u64,
+		/// The post-splice channel value, in satoshis.
+		post_channel_value_satoshis: u64,
+		/// The script which should be used in the transaction output (channel funding output).
+		output_script: ScriptBuf,
+	}
 }
 
 impl Writeable for Event {
@@ -1212,6 +1229,18 @@ impl Writeable for Event {
 			&Event::ConnectionNeeded { .. } => {
 				35u8.write(writer)?;
 				// Never write ConnectionNeeded events as buffered onion messages aren't serialized.
+			},
+			// #SPLICING
+			&Event::SpliceAcked { ref channel_id, ref counterparty_node_id, ref current_funding_outpoint, ref pre_channel_value_satoshis, ref post_channel_value_satoshis, ref output_script } => {
+				33u8.write(writer)?; // TODO value
+				write_tlv_fields!(writer, {
+					(0, channel_id, required),
+					(2, counterparty_node_id, required),
+					(4, current_funding_outpoint, required),
+					(6, pre_channel_value_satoshis, required),
+					(8, post_channel_value_satoshis, required),
+					(10, output_script, required),
+				});
 			},
 			// Note that, going forward, all new events must only write data inside of
 			// `write_tlv_fields`. Versions 0.0.101+ will ignore odd-numbered events that write
@@ -1690,6 +1719,14 @@ pub enum MessageSendEvent {
 		/// The message which should be sent.
 		msg: msgs::Stfu,
 	},
+	// /// Used to indicate that a commitment_signed message should be sent to the peer with the given node_id.
+	// SendCommitmentSigned {
+	// 	/// The node_id of the node which should receive this message
+	// 	node_id: PublicKey,
+	// 	/// The message which should be sent.
+	// 	msg: msgs::CommitmentSigned,
+	// },
+	/// #SPLICING
 	/// Used to indicate that a splice message should be sent to the peer with the given node id.
 	SendSplice {
 		/// The node_id of the node which should receive this message
@@ -1697,6 +1734,7 @@ pub enum MessageSendEvent {
 		/// The message which should be sent.
 		msg: msgs::Splice,
 	},
+	/// #SPLICING
 	/// Used to indicate that a splice_ack message should be sent to the peer with the given node id.
 	SendSpliceAck {
 		/// The node_id of the node which should receive this message
@@ -1710,6 +1748,45 @@ pub enum MessageSendEvent {
 		node_id: PublicKey,
 		/// The message which should be sent.
 		msg: msgs::SpliceLocked,
+	},
+	/// #SPLICING
+	/// Used to indicate that a splice_created message should be sent to the peer with the given node_id.
+	SendSpliceCreated {
+		/// The node_id of the node which should receive this message
+		node_id: PublicKey,
+		/// The message which should be sent.
+		msg: msgs::SpliceCreated,
+	},
+	/// #SPLICING
+	/// Used to indicate that a splice_comm_signed message should be sent to the peer with the given node_id.
+	SendSpliceCommSigned {
+		/// The node_id of the node which should receive this message
+		node_id: PublicKey,
+		/// The message which should be sent.
+		msg: msgs::SpliceCommSigned,
+	},
+	/// Used to indicate that a splice_comm_ack message should be sent to the peer with the given node_id.
+	SendSpliceCommAck {
+		/// The node_id of the node which should receive this message
+		node_id: PublicKey,
+		/// The message which should be sent.
+		msg: msgs::SpliceCommAck,
+	},
+	/// #SPLICING
+	/// Used to indicate that a splice_signed_signed message should be sent to the peer with the given node_id.
+	SendSpliceSigned {
+		/// The node_id of the node which should receive this message
+		node_id: PublicKey,
+		/// The message which should be sent.
+		msg: msgs::SpliceSigned,
+	},
+	/// #SPLICING
+	/// Used to indicate that a splice_signed_ack message should be sent to the peer with the given node_id.
+	SendSpliceSignedAck {
+		/// The node_id of the node which should receive this message
+		node_id: PublicKey,
+		/// The message which should be sent.
+		msg: msgs::SpliceSignedAck,
 	},
 	/// Used to indicate that a tx_add_input message should be sent to the peer with the given node_id.
 	SendTxAddInput {
