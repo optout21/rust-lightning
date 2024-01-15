@@ -2483,7 +2483,7 @@ where
 		Ok(temporary_channel_id)
 	}
 
-	/// #SPLICING STEP1
+	/// #SPLICING STEP1 I
 	/// Inspired by create_channel() and close_channel()
 	/// Initiate a splice, to change the channel capacity
 	/// TODO funding_feerate_perkw
@@ -7146,7 +7146,7 @@ where
 		Ok(persist)
 	}
 
-	// #SPLICING STEP3
+	// #SPLICING STEP3 A
 	// Inspired by handle_open_channel()
 	// Logic for incoming splicing request
 	fn internal_splice(&self, counterparty_node_id: &PublicKey, msg: &msgs::Splice) -> Result<(), MsgHandleErrInternal> {
@@ -7194,7 +7194,7 @@ where
 		}
 	}
 
-	// #SPLICING STEP5
+	// #SPLICING STEP5 I
 	// Logic for incoming splicing_ack message
 	fn internal_splice_ack(&self, counterparty_node_id: &PublicKey, msg: &msgs::SpliceAck) -> Result<(), MsgHandleErrInternal> {
 		if msg.chain_hash != self.chain_hash {

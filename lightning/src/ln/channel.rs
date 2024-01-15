@@ -5797,7 +5797,7 @@ impl<SP: Deref> Channel<SP> where
 		}
 	}
 
-	/// #SPLICING STEP2
+	/// #SPLICING STEP2 I
 	/// Inspired by get_open_channel()
 	/// Get the splice message that can be sent during splice initiation
 	pub fn get_splice(&self, chain_hash: ChainHash,
@@ -5834,7 +5834,7 @@ impl<SP: Deref> Channel<SP> where
 		}
 	}
 
-	/// #SPLICING STEP4
+	/// #SPLICING STEP4 A
 	/// Get the splice_ack message that can be sent in response to splice initiation
 	/// TODO move to ChannelContext
 	pub fn get_splice_ack(&self, chain_hash: ChainHash,
