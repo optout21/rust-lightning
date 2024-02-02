@@ -44,9 +44,10 @@ use crate::events::{Event, EventHandler, EventsProvider, MessageSendEvent, Messa
 // Since this struct is returned in `list_channels` methods, expose it here in case users want to
 // construct one themselves.
 use crate::ln::{inbound_payment, ChannelId, PaymentHash, PaymentPreimage, PaymentSecret};
-use crate::ln::channel::{Channel, ChannelPhase, ChannelContext, ChannelError, ChannelUpdateStatus, DualFundingChannelContext, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, OutboundV1Channel, InboundV1Channel, PendingSpliceInfo, WithChannelContext};
+use crate::ln::channel::{Channel, ChannelPhase, ChannelContext, ChannelError, ChannelUpdateStatus, DualFundingChannelContext, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, OutboundV1Channel, InboundV1Channel, WithChannelContext};
 #[cfg(dual_funding)]
 use crate::ln::channel::{InboundV2Channel, OutboundV2Channel};
+use crate::ln::channel_splice::PendingSpliceInfoPre;
 use crate::ln::features::{Bolt12InvoiceFeatures, ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
 #[cfg(any(feature = "_test_utils", test))]
 use crate::ln::features::Bolt11InvoiceFeatures;
@@ -2616,6 +2617,7 @@ where
 		let their_features = &peer_state.latest_features;
 		let config = if override_config.is_some() { override_config.as_ref().unwrap() } else { &self.default_configuration };
 
+		/*
 		// TODO(dual_funding): Merge this with below when cfg is removed.
 		let (channel_phase, msg_send_event) = {
 			let channel = {
@@ -2637,6 +2639,7 @@ where
 			};
 			(ChannelPhase::UnfundedOutboundV1(channel), event)
 		};
+		*/
 
 		#[cfg(dual_funding)]
 		let (channel_phase, msg_send_event) = if is_v2 {
@@ -2653,10 +2656,10 @@ where
 					},
 				}
 			};
-			let res = channel.get_open_channel_v2(self.chain_hash);
+			let msg = channel.get_open_channel_v2(self.chain_hash);
 			let event = events::MessageSendEvent::SendOpenChannelV2 {
 				node_id: their_network_key,
-				msg: res,
+				msg,
 			};
 			(ChannelPhase::UnfundedOutboundV2(channel), event)
 		} else {
@@ -2699,6 +2702,7 @@ where
 	/// #SPLICING STEP1 I
 	/// Inspired by create_channel() and close_channel()
 	/// Initiate a splice, to change the channel capacity
+	/// TODO update docu flow
 	/// TODO funding_feerate_perkw
 	/// TODO locktime
 	///
@@ -2716,44 +2720,67 @@ where
 	///   <------- splice_signed_ack ---    send signature on funding tx. In future this should be tx_signatures
 	///   [new funding tx can be broadcast]
 	pub fn splice_channel(&self, channel_id: &ChannelId, their_network_key: &PublicKey, relative_satoshis: i64, funding_feerate_perkw: u32, locktime: u32) -> Result<(), APIError> {
-		// TODO handle code duplication with create_channel
-
 		let _persistence_guard = PersistenceNotifierGuard::notify_on_drop(self);
 		// We want to make sure the lock is actually acquired by PersistenceNotifierGuard.
 		debug_assert!(&self.total_consistency_lock.try_write().is_err());
 
 		let per_peer_state = self.per_peer_state.read().unwrap();
-
 		let peer_state_mutex = per_peer_state.get(their_network_key)
 			.ok_or_else(|| APIError::APIMisuseError{ err: format!("Not connected to node: {}", their_network_key) })?;
 
-		// Look for channel; taken from close_channel()
 		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 		let peer_state = &mut *peer_state_lock;
+		// Look for channel
 		match peer_state.channel_by_id.entry(channel_id.clone()) {
 			hash_map::Entry::Vacant(_) => return Err(APIError::ChannelUnavailable{err: format!("Channel with id {} not found for the passed counterparty node_id {}", channel_id, their_network_key) }),
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				if let ChannelPhase::Funded(chan) = chan_phase_entry.get_mut() {
-					let current_value_sats = chan.context.get_value_satoshis();
-					// TODO check for i64 overflow
-					if relative_satoshis < 0 && -relative_satoshis > (current_value_sats as i64) {
-						return Err(APIError::APIMisuseError { err: format!("Post-splicing channel value cannot be negative. It was {} - {}", current_value_sats, -relative_satoshis) });
+					if relative_satoshis < 0 {
+						return Err(APIError::APIMisuseError { err: format!("Splice/out not supported, only splice in, relative {}, channel_id {}", -relative_satoshis, channel_id) });
 					}
-					let post_splice_funding_satoshis = PendingSpliceInfo::add_checked(current_value_sats, relative_satoshis);
 
-					// TODO handle code duplication with create_channel
-					if post_splice_funding_satoshis < 1000 {
-						return Err(APIError::APIMisuseError { err: format!("Post-splicing channel value must be at least 1000 satoshis. It was {}", post_splice_funding_satoshis) });
+					let pre_channel_value = chan.context.get_value_satoshis();
+					// TODO check for i64 overflow
+					if relative_satoshis < 0 && -relative_satoshis > (pre_channel_value as i64) {
+						return Err(APIError::APIMisuseError { err: format!("Post-splicing channel value cannot be negative. It was {} - {}", pre_channel_value, -relative_satoshis) });
 					}
-					// Store post-splicing channel value (pending)
-					// TODO check if pending_splice is already set
-					chan.context.pending_splice = Some(PendingSpliceInfo::new(relative_satoshis, current_value_sats, true));
-					chan.dual_funding_channel_context = Some(DualFundingChannelContext {
-						our_funding_satoshis: chan.context.pending_splice.as_ref().unwrap().post_channel_value,
-						their_funding_satoshis: 0,
-						funding_tx_locktime: LockTime::ZERO, // TODO
-						funding_feerate_sat_per_1000_weight: funding_feerate_perkw,
-					});
+
+					let post_channel_value = PendingSpliceInfoPre::add_checked(pre_channel_value, relative_satoshis);
+					if post_channel_value < 1000 {
+						return Err(APIError::APIMisuseError { err: format!("Post-splicing channel value must be at least 1000 satoshis. It was {}", post_channel_value) });
+					}
+
+					if chan.context.pending_splice_pre.is_some() {
+						return Err(APIError::ChannelUnavailable { err: format!("Channel has already a splice pending, channel id {}", channel_id) });
+					}
+
+					chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(relative_satoshis, pre_channel_value, None, funding_feerate_perkw, locktime));
+
+					// Check channel id
+					let post_splice_v2_channel_id = chan.context.generate_v2_channel_id_from_revocation_basepoints();
+					if post_splice_v2_channel_id != chan.context.channel_id() {
+						return Err(APIError::APIMisuseError { err: format!("Channel ID would change during splicing (e.g. splice on V1 channel), not yet supported, channel id {} {}",
+							chan.context.channel_id(), post_splice_v2_channel_id) });
+					}
+
+					// // Save the current funding transaction
+					// let pre_funding_transaction = chan.context.funding_transaction().clone(); // TODO check error
+					// let pre_funding_txo = chan.context.get_funding_txo().clone(); // TODO check error
+
+					// let pending_splice_post = PendingSpliceInfoPost::new(
+					// 	relative_satoshis, pre_channel_value, true,
+					// 	Some(chan.context.channel_id()),
+					// 	funding_feerate_perkw, locktime,
+					// 	pre_funding_transaction,
+					// 	pre_funding_txo,
+					// );
+					// chan.context.pending_splice_post = Some(pending_splice_post);
+
+					// let new_chan = Channel {
+					// 	context: chan.context,
+					// 	dual_funding_channel_context: None,
+					// 	interactive_tx_signing_session: None,
+					// };
 
 					let msg = chan.get_splice(self.chain_hash.clone(), relative_satoshis, funding_feerate_perkw, locktime);
 
@@ -2761,9 +2788,10 @@ where
 						node_id: *their_network_key,
 						msg,
 					});
+			
 					Ok(())
 				} else {
-					return Err(APIError::ChannelUnavailable{err: format!("Channel with id {} is not funded", channel_id) });
+					return Err(APIError::ChannelUnavailable { err: format!("Channel with id {} is not funded", channel_id) });
 				}
 
 			},
@@ -4185,25 +4213,26 @@ where
 				let tx_msg_opt = match phase.get_mut() {
 					ChannelPhase::UnfundedOutboundV2(chan) => {
 						chan.begin_interactive_funding_tx_construction(&self.signer_provider,
-							&self.entropy_source, self.get_our_node_id(), false, funding_inputs, &self.logger,
+							&self.entropy_source, self.get_our_node_id(), funding_inputs, &self.logger,
 						)?
 					},
 					ChannelPhase::UnfundedInboundV2(chan) => {
 						chan.begin_interactive_funding_tx_construction(&self.signer_provider,
-							&self.entropy_source, self.get_our_node_id(), false, funding_inputs, &self.logger,
+							&self.entropy_source, self.get_our_node_id(), funding_inputs, &self.logger,
 						)?
 					},
+					/*
 					// This is neeed when Channel is not changed during splicing, and interactive
 					// transaction is constructed on the Funded channel. TODO: remove if new
 					// unfunded channel instance is used during splicing
 					ChannelPhase::Funded(chan) => {
-						if chan.context.pending_splice.is_some() {
+						if chan.context.pending_splice_post.is_some() {
 							let msg = chan.begin_interactive_funding_tx_construction(&self.signer_provider,
-								&self.entropy_source, self.get_our_node_id(), true, true, funding_inputs, &self.logger)?;
+								&self.entropy_source, self.get_our_node_id(), false, funding_inputs, &self.logger)?;
 
 							// Commit to post-splice parameters prematurely, to have right values for commitment building
 							// TODO: commitment should happen only upon confirmation
-							let _ = chan.context.commit_pending_splice(&self.logger).unwrap();
+							// let _ = chan.context.commit_pending_splice(&self.logger).unwrap();
 
 							msg
 						} else {
@@ -4212,6 +4241,7 @@ where
 							});
 						}
 					},
+					*/
 					_ => {
 						return Err(APIError::ChannelUnavailable {
 							err: format!("Channel with ID {} is not an unfunded V2 channel", counterparty_node_id) });
@@ -4245,7 +4275,7 @@ where
 	#[cfg(dual_funding)]
 	pub fn funding_transaction_signed(&self, channel_id: &ChannelId, counterparty_node_id: &PublicKey,
 		transaction: Transaction) -> Result<(), APIError> {
-		let witnesses: Vec<_> = transaction.input.clone().into_iter().enumerate().filter_map(|(idx, input)| {
+		let witnesses: Vec<_> = transaction.input.clone().into_iter().enumerate().filter_map(|(_idx, input)| {
 			if input.witness.is_empty() { None } else { Some(input.witness) }
 		}).collect();
 
@@ -4263,7 +4293,7 @@ where
 					// Shared signature (splicing): holder signature on the prev funding tx input should have been saved.
 					// include it in tlvs field
 					let mut tlvs = None;
-					if chan.context.pending_splice.is_some() {
+					if chan.context.pending_splice_post.is_some() {
 						if let Some(s) = signing_session.shared_signature {
 							tlvs = Some(s);
 						} // TODO error
@@ -6682,7 +6712,7 @@ where
 				channel.context.set_outbound_scid_alias(outbound_scid_alias);
 
 				channel.begin_interactive_funding_tx_construction(&self.signer_provider, &self.entropy_source,
-					self.get_our_node_id(), false, Vec::new(), &self.logger).map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
+					self.get_our_node_id(), Vec::new(), &self.logger).map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
 						"Failed to start interactive transaction construction".to_owned(), msg.temporary_channel_id))?;
 
 				peer_state.pending_msg_events.push(events::MessageSendEvent::SendAcceptChannelV2 {
@@ -6746,7 +6776,7 @@ where
 		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 		let peer_state = &mut *peer_state_lock;
 
-		let (chan, channel_id, holder_funding_satoshis, counterparty_funding_satoshis, user_channel_id) = {
+		let (chan, new_channel_id, holder_funding_satoshis, counterparty_funding_satoshis, user_channel_id) = {
 			match peer_state.channel_by_id.remove(&msg.temporary_channel_id) {
 				Some(phase) => {
 					match phase {
@@ -6755,10 +6785,10 @@ where
 								let (_, res) = convert_chan_phase_err!(self, err, chan, &msg.temporary_channel_id, UNFUNDED_CHANNEL);
 								let _: Result<(), _> = handle_error!(self, Err(res), *counterparty_node_id);
 							}
-							let channel_id = chan.context.channel_id();
+							let new_channel_id = chan.context.channel_id();
 							let holder_funding_satoshis = chan.dual_funding_context.our_funding_satoshis;
 							let user_channel_id = chan.context.get_user_id();
-							(chan, channel_id, holder_funding_satoshis, msg.funding_satoshis, user_channel_id)
+							(chan, new_channel_id, holder_funding_satoshis, msg.funding_satoshis, user_channel_id)
 						},
 						_ => {
 							peer_state.channel_by_id.insert(msg.temporary_channel_id, phase);
@@ -6770,10 +6800,10 @@ where
 			}
 		};
 
-		peer_state.channel_by_id.insert(chan.context.channel_id(), ChannelPhase::UnfundedOutboundV2(chan));
+		peer_state.channel_by_id.insert(new_channel_id, ChannelPhase::UnfundedOutboundV2(chan));
 		let mut pending_events = self.pending_events.lock().unwrap();
 		pending_events.push_back((events::Event::FundingInputsContributionReady {
-			channel_id,
+			channel_id: new_channel_id,
 			counterparty_node_id: *counterparty_node_id,
 			holder_funding_satoshis,
 			counterparty_funding_satoshis,
@@ -6946,11 +6976,11 @@ where
 				let channel_phase = chan_phase_entry.get_mut();
 				match channel_phase {
 					ChannelPhase::UnfundedInboundV2(_) |
-					ChannelPhase::UnfundedOutboundV2(_) |
+					ChannelPhase::UnfundedOutboundV2(_) => {
 					// This is neeed when Channel is not changed during splicing, and interactive
 					// transaction is constructed on the Funded channel. TODO: remove if new
 					// unfunded channel instance is used during splicing
-					ChannelPhase::Funded(_) => {
+					// ChannelPhase::Funded(_) => {
 						let tx_msg = channel_phase.context_mut().tx_add_input(msg);
 						let msg_send_event = match tx_msg {
 							Ok(InteractiveTxMessageSend::TxAddInput(msg)) => events::MessageSendEvent::SendTxAddInput {
@@ -6993,11 +7023,11 @@ where
 				let channel_phase = chan_phase_entry.get_mut();
 				match channel_phase {
 					ChannelPhase::UnfundedInboundV2(_) |
-					ChannelPhase::UnfundedOutboundV2(_) |
+					ChannelPhase::UnfundedOutboundV2(_) => {
 					// This is neeed when Channel is not changed during splicing, and interactive
 					// transaction is constructed on the Funded channel. TODO: remove if new
 					// unfunded channel instance is used during splicing
-					ChannelPhase::Funded(_) => {
+					// ChannelPhase::Funded(_) => {
 						let tx_msg = channel_phase.context_mut().tx_add_output(msg);
 						let msg_send_event = match tx_msg {
 							Ok(InteractiveTxMessageSend::TxAddInput(msg)) => events::MessageSendEvent::SendTxAddInput {
@@ -7124,11 +7154,11 @@ where
 				let channel_phase = chan_phase_entry.get_mut();
 				match channel_phase {
 					ChannelPhase::UnfundedInboundV2(_) |
-					ChannelPhase::UnfundedOutboundV2(_) |
+					ChannelPhase::UnfundedOutboundV2(_) => {
 					// This is neeed when Channel is not changed during splicing, and interactive
 					// transaction is constructed on the Funded channel. TODO: remove if new
 					// unfunded channel instance is used during splicing
-					ChannelPhase::Funded(_) => {
+					// ChannelPhase::Funded(_) => {
 						let result = channel_phase.context_mut().tx_complete(msg);
 						match result {
 							Ok((tx_msg_opt, signing_session_opt)) => {
@@ -7160,6 +7190,7 @@ where
 												}
 											)
 										},
+										/*
 										// This is neeed when Channel is not changed during splicing, and interactive
 										// transaction is constructed on the Funded channel. TODO: remove if new
 										// unfunded channel instance is used during splicing
@@ -7170,6 +7201,7 @@ where
 												}
 											)
 										},
+										*/
 										_ => {
 											todo!();
 										},
@@ -8105,13 +8137,6 @@ where
 		// TODO checks
 		// TODO check if we accept splicing, quiscence
 
-		/*
-		// Get the number of peers with channels, but without funded ones. We don't care too much
-		// about peers that never open a channel, so we filter by peers that have at least one
-		// channel, and then limit the number of those with unfunded channels.
-		let _channeled_peers_without_funding = self.peers_without_funded_channels(|node| !node.channel_by_id.is_empty());
-		*/
-
 		let per_peer_state = self.per_peer_state.read().unwrap();
 		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
 			.ok_or_else(|| {
@@ -8121,48 +8146,109 @@ where
 		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 		let peer_state = &mut *peer_state_lock;
 
-		match peer_state.channel_by_id.entry(msg.channel_id) {
-			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id)),
-			hash_map::Entry::Occupied(mut chan_entry) => {
-				if let ChannelPhase::Funded(chan) = chan_entry.get_mut() {
-					// Store post-splicing channel value (pending)
-					// TODO check if there is a pending already
-					chan.context.pending_splice = Some(PendingSpliceInfo::new(msg.relative_satoshis, chan.context.get_value_satoshis(), false));
-					chan.dual_funding_channel_context = Some(DualFundingChannelContext {
-						our_funding_satoshis: 0,
-						their_funding_satoshis: 0,
-						funding_tx_locktime: LockTime::ZERO, // TODO
-						funding_feerate_sat_per_1000_weight: msg.funding_feerate_perkw,
-					});
+		// Look for channel
+		let post_channel_value = match peer_state.channel_by_id.entry(msg.channel_id) {
+			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}, channel_id {}", counterparty_node_id, msg.channel_id), msg.channel_id)),
+			hash_map::Entry::Occupied(chan_entry) => {
+				if let ChannelPhase::Funded(chan) = chan_entry.get() {
+					if msg.relative_satoshis < 0 {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Splice/out not supported, only splice in, relative {}", -msg.relative_satoshis), msg.channel_id));
+					}
 
-					let new_msg = chan.get_splice_ack(self.chain_hash.clone(), msg.relative_satoshis);
+					let pre_channel_value = chan.context.get_value_satoshis();
+					// TODO check for i64 overflow
+					if msg.relative_satoshis < 0 && -msg.relative_satoshis > (pre_channel_value as i64) {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Post-splicing channel value cannot be negative. It was {} - {}", pre_channel_value, -msg.relative_satoshis), msg.channel_id));
+					}
+
+					let post_channel_value = PendingSpliceInfoPre::add_checked(pre_channel_value, msg.relative_satoshis);
+					if post_channel_value < 1000 {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Post-splicing channel value must be at least 1000 satoshis. It was {}", post_channel_value), msg.channel_id));
+					}
+
+					// Check if a splice has been initiated already. Note: this could be handled more nicely, and support multiple outstanding splice's, the incoming splice_ack matters anyways
+					if chan.context.pending_splice_pre.is_some() {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Channel has already a splice pending, channel id {}", msg.channel_id), msg.channel_id));
+					}
+
+					// Check channel id
+					let post_splice_v2_channel_id = chan.context.generate_v2_channel_id_from_revocation_basepoints();
+					if post_splice_v2_channel_id != chan.context.channel_id() {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Channel ID would change during splicing (e.g. splice on V1 channel), not yet supported, channel id {} {}",
+							chan.context.channel_id(), post_splice_v2_channel_id), msg.channel_id));
+					}
+
+					post_channel_value
+				} else {
+					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
+				}
+			},
+		};
+
+		// Change channel, phase changes, remove and add
+		// Remove the pre channel
+		let prev_chan = match peer_state.channel_by_id.remove(&msg.channel_id) {
+			None => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}, channel_id {}", counterparty_node_id, msg.channel_id), msg.channel_id)),
+			Some(chan_phase) => {
+				if let ChannelPhase::Funded(chan) = chan_phase {
+					chan
+				} else {
+					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
+				}
+			}
+		};
+
+		let post_chan = InboundV2Channel {
+			context: prev_chan.context,
+			unfunded_context: UnfundedChannelContext::default(),
+			dual_funding_context: DualFundingChannelContext {
+				our_funding_satoshis: 0,
+				their_funding_satoshis: post_channel_value, // msg.relative_satoshis as u64,
+				funding_tx_locktime: LockTime::from_consensus(msg.locktime),
+				funding_feerate_sat_per_1000_weight: msg.funding_feerate_perkw,
+			},
+		};
+
+		// Add the modified channel
+		let post_chan_id = post_chan.context.channel_id();
+		peer_state.channel_by_id.insert(post_chan_id, ChannelPhase::UnfundedInboundV2(post_chan));
+
+		// Perform state changes
+		match peer_state.channel_by_id.entry(post_chan_id) {
+			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close("Internal consistency error".to_string(), post_chan_id)),
+			hash_map::Entry::Occupied(mut chan_entry) => {
+				if let ChannelPhase::UnfundedInboundV2(post_chan) = chan_entry.get_mut() {
+					let pre_channel_value = post_chan.context.get_value_satoshis();
+
+					post_chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(msg.relative_satoshis, pre_channel_value, Some(post_chan_id), msg.funding_feerate_perkw, msg.locktime));
+
+					// Apply start of splice changed in the state (update state, capacity funding tx, ...)
+					post_chan.context.splice_start(false, msg.relative_satoshis, &self.logger)
+						.map_err(|ce| MsgHandleErrInternal::send_err_msg_no_close(ce.to_string(), msg.channel_id.clone()))?;
+
+					let new_msg = post_chan.get_splice_ack(self.chain_hash.clone()).unwrap(); // TODO error
 					peer_state.pending_msg_events.push(events::MessageSendEvent::SendSpliceAck {
 						node_id: *counterparty_node_id,
 						msg: new_msg,
 					});
 
-					let _msg = chan.begin_interactive_funding_tx_construction(
+					let _msg = post_chan.begin_interactive_funding_tx_construction(
 						&self.signer_provider,
 						&self.entropy_source,
 						self.get_our_node_id(),
-						false,
-						true,
+						// false,
 						Vec::new(),
 						&self.logger,
-					).map_err(|e0| MsgHandleErrInternal::send_err_msg_no_close(
-						format!("Failed to start interactive transaction construction, {:?}", e0), msg.channel_id
+					).map_err(|e| MsgHandleErrInternal::send_err_msg_no_close(
+						format!("Failed to start interactive transaction construction, {:?}", e), msg.channel_id
 					))?;
-
-					// Commit to post-splice parameters prematurely, to have right values for commitment building
-					// TODO: commitment should happen only upon confirmation
-					let _ = chan.context.commit_pending_splice(&self.logger).unwrap();
-
-					Ok(())
 				} else {
-					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
+					return Err(MsgHandleErrInternal::send_err_msg_no_close("Internal consistency error".to_string(), post_chan_id));
 				}
-			},
+			}
 		}
+
+		Ok(())
 	}
 
 	// #SPLICING STEP5 I
@@ -8177,49 +8263,91 @@ where
 
 		// Note that the ChannelManager is NOT re-persisted on disk after this, so any changes are
 		// likely to be lost on restart!
-		let (pre_channel_value_satoshis, post_channel_value_satoshis, holder_funding_satoshis, counterparty_funding_satoshis) = {
-			let per_peer_state = self.per_peer_state.read().unwrap();
-			let peer_state_mutex = per_peer_state.get(counterparty_node_id)
-				.ok_or_else(|| {
-					debug_assert!(false);
-					MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id), msg.channel_id.clone())
-				})?;
-			let mut peer_state_lock = peer_state_mutex.lock().unwrap();
-			let peer_state = &mut *peer_state_lock;
+		let per_peer_state = self.per_peer_state.read().unwrap();
+		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
+			.ok_or_else(|| {
+				debug_assert!(false);
+				MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id), msg.channel_id.clone())
+			})?;
+		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
+		let peer_state = &mut *peer_state_lock;
 
-			match peer_state.channel_by_id.entry(msg.channel_id) {
-				hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id)),
-				hash_map::Entry::Occupied(mut chan) => {
-					if let ChannelPhase::Funded(chan) = chan.get_mut() {
-						if let Some(pending_splice) = &chan.context.pending_splice {
-							(
-								pending_splice.pre_channel_value,
-								pending_splice.post_channel_value,
-								pending_splice.post_channel_value,
-								0,
-								// chan.context.channel_transaction_parameters.funding_outpoint.unwrap().into_bitcoin_outpoint(),
-								// chan.context.get_funding_redeemscript().to_v0_p2wsh(), // TODO check wether this is correct, correct keys used (from splice negot, and not from pre)
-							)
-						} else {
-							return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel has no pending splice".to_owned(), msg.channel_id.clone()));
-						}
+		// Look for channel
+		let pending_splice = match peer_state.channel_by_id.entry(msg.channel_id) {
+			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id)),
+			hash_map::Entry::Occupied(chan) => {
+				if let ChannelPhase::Funded(chan) = chan.get() {
+					// check if splice is pending
+					if let Some(pending_splice) = &chan.context.pending_splice_pre {
+						// TODO check the splice_ack parameters (relative amnt) match saved splice parematers
+						pending_splice.clone()
 					} else {
-						return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
+						return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel is not in pending splice".to_owned(), msg.channel_id.clone()));
 					}
-				},
+				} else {
+					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
+				}
+			},
+		};
+
+		// Change channel, phase changes, remove and add
+		// Remove the pre channel
+		let prev_chan = match peer_state.channel_by_id.remove(&msg.channel_id) {
+			None => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}, channel_id {}", counterparty_node_id, msg.channel_id), msg.channel_id)),
+			Some(chan_phase) => {
+				if let ChannelPhase::Funded(chan) = chan_phase {
+					chan
+				} else {
+					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
+				}
 			}
 		};
 
-		// Prepare SpliceAckedInputsContributionReady event
-		let mut pending_events = self.pending_events.lock().unwrap();
-		pending_events.push_back((events::Event::SpliceAckedInputsContributionReady {
-			channel_id: msg.channel_id,
-			counterparty_node_id: *counterparty_node_id,
-			pre_channel_value_satoshis,
-			post_channel_value_satoshis,
-			holder_funding_satoshis,
-			counterparty_funding_satoshis,
-		} , None));
+		let post_chan = OutboundV2Channel {
+			context: prev_chan.context,
+			unfunded_context: UnfundedChannelContext::default(),
+			dual_funding_context: DualFundingChannelContext {
+				our_funding_satoshis: pending_splice.post_channel_value, // msg.relative_satoshis as u64,
+				their_funding_satoshis: 0,
+				funding_tx_locktime: LockTime::from_consensus(pending_splice.locktime),
+				funding_feerate_sat_per_1000_weight: pending_splice.funding_feerate_perkw,
+			},
+		};
+
+		// Add the modified channel
+		let post_chan_id = post_chan.context.channel_id();
+		peer_state.channel_by_id.insert(post_chan_id, ChannelPhase::UnfundedOutboundV2(post_chan));
+
+		// Perform state changes
+		match peer_state.channel_by_id.entry(post_chan_id) {
+			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close("Internal consistency error".to_string(), post_chan_id)),
+			hash_map::Entry::Occupied(mut chan_entry) => {
+				if let ChannelPhase::UnfundedOutboundV2(post_chan) = chan_entry.get_mut() {
+					let pre_channel_value = post_chan.context.get_value_satoshis();
+					let post_channel_value = PendingSpliceInfoPre::add_checked(pre_channel_value, msg.relative_satoshis);
+
+					post_chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(msg.relative_satoshis, pre_channel_value, Some(post_chan_id), pending_splice.funding_feerate_perkw, pending_splice.locktime));
+
+					// Apply start of splice changed in the state (update state, capacity funding tx, ...)
+					post_chan.context.splice_start(true, msg.relative_satoshis, &self.logger)
+						.map_err(|ce| MsgHandleErrInternal::send_err_msg_no_close(ce.to_string(), post_chan_id))?;
+
+					// Prepare SpliceAckedInputsContributionReady event
+					let mut pending_events = self.pending_events.lock().unwrap();
+					pending_events.push_back((events::Event::SpliceAckedInputsContributionReady {
+						channel_id: post_chan_id,
+						counterparty_node_id: *counterparty_node_id,
+						pre_channel_value_satoshis: pre_channel_value,
+						post_channel_value_satoshis: post_channel_value,
+						holder_funding_satoshis: post_channel_value,
+						counterparty_funding_satoshis: 0,
+					} , None));
+				} else {
+					return Err(MsgHandleErrInternal::send_err_msg_no_close("Internal consistency error".to_string(), post_chan_id));
+				}
+			}
+		}
+
 		Ok(())
 	}
 
@@ -8394,7 +8522,7 @@ where
 						});
 					}
 				}
-				ChannelPhase::UnfundedOutboundV2(chan) => {
+				ChannelPhase::UnfundedOutboundV2(_chan) => {
 					todo!("dual_funding");
 				}
 				ChannelPhase::UnfundedInboundV1(_) |
@@ -11660,7 +11788,7 @@ where
 			// 0.0.102+
 			for (_, monitor) in args.channel_monitors.iter() {
 				let counterparty_opt = id_to_peer.get(&monitor.get_funding_txo().0.to_channel_id());
-				let chan_id = monitor.get_funding_txo().0.to_channel_id();
+				let _chan_id = monitor.get_funding_txo().0.to_channel_id();
 				if counterparty_opt.is_none() {
 					let logger = WithChannelMonitor::from(&args.logger, monitor);
 					for (htlc_source, (htlc, _)) in monitor.get_pending_or_resolved_outbound_htlcs() {

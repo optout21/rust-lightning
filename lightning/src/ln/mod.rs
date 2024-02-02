@@ -23,6 +23,7 @@ pub mod chan_utils;
 pub mod features;
 pub mod script;
 mod channel_id;
+mod channel_splice;
 
 #[cfg(fuzzing)]
 pub mod peer_channel_encryptor;
