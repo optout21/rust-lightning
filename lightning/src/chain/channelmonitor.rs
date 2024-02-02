@@ -1299,8 +1299,8 @@ impl<Signer: WriteableEcdsaChannelSigner> ChannelMonitor<Signer> {
 	/// We cache also the mapping hash:commitment number to lighten pruning of old preimages by watchtowers.
 	/// #SPLICING
 	/// TODO changed to prod & pub(crate), from test & private
-	// #[cfg(test)]
-	pub(crate) fn provide_latest_counterparty_commitment_tx<L: Deref>(
+	#[cfg(test)]
+	fn provide_latest_counterparty_commitment_tx<L: Deref>(
 		&self,
 		txid: Txid,
 		htlc_outputs: Vec<(HTLCOutputInCommitment, Option<Box<HTLCSource>>)>,

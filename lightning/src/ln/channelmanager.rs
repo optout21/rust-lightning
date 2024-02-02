@@ -2617,7 +2617,6 @@ where
 		let their_features = &peer_state.latest_features;
 		let config = if override_config.is_some() { override_config.as_ref().unwrap() } else { &self.default_configuration };
 
-		/*
 		// TODO(dual_funding): Merge this with below when cfg is removed.
 		let (channel_phase, msg_send_event) = {
 			let channel = {
@@ -2639,7 +2638,6 @@ where
 			};
 			(ChannelPhase::UnfundedOutboundV1(channel), event)
 		};
-		*/
 
 		#[cfg(dual_funding)]
 		let (channel_phase, msg_send_event) = if is_v2 {
@@ -4194,12 +4192,12 @@ where
 				let tx_msg_opt = match phase.get_mut() {
 					ChannelPhase::UnfundedOutboundV2(chan) => {
 						chan.begin_interactive_funding_tx_construction(&self.signer_provider,
-							&self.entropy_source, self.get_our_node_id(), funding_inputs, &self.logger,
+							&self.entropy_source, self.get_our_node_id(), funding_inputs,
 						)?
 					},
 					ChannelPhase::UnfundedInboundV2(chan) => {
 						chan.begin_interactive_funding_tx_construction(&self.signer_provider,
-							&self.entropy_source, self.get_our_node_id(), funding_inputs, &self.logger,
+							&self.entropy_source, self.get_our_node_id(), funding_inputs,
 						)?
 					},
 					_ => {
@@ -6672,7 +6670,7 @@ where
 				channel.context.set_outbound_scid_alias(outbound_scid_alias);
 
 				channel.begin_interactive_funding_tx_construction(&self.signer_provider, &self.entropy_source,
-					self.get_our_node_id(), Vec::new(), &self.logger).map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
+					self.get_our_node_id(), Vec::new()).map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
 						"Failed to start interactive transaction construction".to_owned(), msg.temporary_channel_id))?;
 
 				peer_state.pending_msg_events.push(events::MessageSendEvent::SendAcceptChannelV2 {
@@ -6935,8 +6933,7 @@ where
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				let channel_phase = chan_phase_entry.get_mut();
 				match channel_phase {
-					ChannelPhase::UnfundedInboundV2(_) |
-					ChannelPhase::UnfundedOutboundV2(_) => {
+					ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
 						let tx_msg = channel_phase.context_mut().tx_add_input(msg);
 						let msg_send_event = match tx_msg {
 							Ok(InteractiveTxMessageSend::TxAddInput(msg)) => events::MessageSendEvent::SendTxAddInput {
@@ -6978,8 +6975,7 @@ where
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				let channel_phase = chan_phase_entry.get_mut();
 				match channel_phase {
-					ChannelPhase::UnfundedInboundV2(_) |
-					ChannelPhase::UnfundedOutboundV2(_) => {
+					ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
 						let tx_msg = channel_phase.context_mut().tx_add_output(msg);
 						let msg_send_event = match tx_msg {
 							Ok(InteractiveTxMessageSend::TxAddInput(msg)) => events::MessageSendEvent::SendTxAddInput {
@@ -7105,8 +7101,7 @@ where
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				let channel_phase = chan_phase_entry.get_mut();
 				match channel_phase {
-					ChannelPhase::UnfundedInboundV2(_) |
-					ChannelPhase::UnfundedOutboundV2(_) => {
+					ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
 						let result = channel_phase.context_mut().tx_complete(msg);
 						match result {
 							Ok((tx_msg_opt, signing_session_opt)) => {
@@ -8174,7 +8169,6 @@ where
 						self.get_our_node_id(),
 						// false,
 						Vec::new(),
-						&self.logger,
 					).map_err(|e| MsgHandleErrInternal::send_err_msg_no_close(
 						format!("Failed to start interactive transaction construction, {:?}", e), msg.channel_id
 					))?;

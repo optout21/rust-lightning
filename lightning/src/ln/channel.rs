@@ -22,7 +22,7 @@ use bitcoin::secp256k1::constants::PUBLIC_KEY_SIZE;
 use bitcoin::secp256k1::{PublicKey,SecretKey};
 use bitcoin::secp256k1::{Secp256k1,ecdsa::Signature};
 use bitcoin::{secp256k1, TxIn, TxOut};
-// #[cfg(dual_funding)]
+// #[cfg(dual_funding)]  // TODO splicing
 use bitcoin::Witness;
 #[cfg(dual_funding)]
 use bitcoin::locktime::absolute::LockTime;
@@ -3241,25 +3241,6 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 		}
 	}
 
-	/// #SPLICING Moved from InboundV1Channel to ChannelContext
-	fn check_funding_created_signature<L: Deref>(&mut self, sig: &Signature, logger: &L) -> Result<CommitmentTransaction, ChannelError> where L::Target: Logger {
-		let funding_script = self.get_funding_redeemscript();
-
-		let keys = self.build_holder_transaction_keys(self.cur_holder_commitment_transaction_number);
-		let initial_commitment_tx = self.build_commitment_transaction(self.cur_holder_commitment_transaction_number, &keys, true, false, logger).tx;
-		let trusted_tx = initial_commitment_tx.trust();
-		let initial_commitment_bitcoin_tx = trusted_tx.built_transaction();
-		let sighash = initial_commitment_bitcoin_tx.get_sighash_all(&funding_script, self.channel_value_satoshis);
-		// They sign the holder commitment transaction...
-		log_trace!(logger, "Checking funding_created tx signature {} by key {} against tx {} (sighash {}) with redeemscript {} for channel {}.",
-			log_bytes!(sig.serialize_compact()[..]), log_bytes!(self.counterparty_funding_pubkey().serialize()),
-			encode::serialize_hex(&initial_commitment_bitcoin_tx.transaction), log_bytes!(sighash[..]),
-			encode::serialize_hex(&funding_script), &self.channel_id());
-		secp_check!(self.secp_ctx.verify_ecdsa(&sighash, &sig, self.counterparty_funding_pubkey()), "Invalid funding_created signature from peer".to_owned());
-
-		Ok(initial_commitment_tx)
-	}
-
 	/// #SPLICING
 	/// Update channel capacity to a new value
 	/// It is assumed that the increase is coming to A's side
@@ -3285,33 +3266,15 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 		Ok(())
 	}
 
-	/// If an Err is returned, it is a ChannelError::Close (for get_funding_created)
-	/// #SPLICING: Moved to ChannelContext from OutboundV1Channel
-	fn get_funding_created_signature<L: Deref>(&mut self, logger: &L)
-		-> Result<(CommitmentTransaction, CommitmentTransaction, Signature), ChannelError> where L::Target: Logger {
-		let keys = self.build_holder_transaction_keys(self.cur_holder_commitment_transaction_number);
-		let initial_commitment_tx = self.build_commitment_transaction(self.cur_holder_commitment_transaction_number, &keys, true, false, logger).tx;
-
-		let counterparty_keys = self.build_remote_transaction_keys();
-		let counterparty_initial_commitment_tx = self.build_commitment_transaction(self.cur_counterparty_commitment_transaction_number, &counterparty_keys, false, false, logger).tx;
-		match &self.holder_signer {
-			// TODO (taproot|arik): move match into calling method for Taproot
-			ChannelSignerType::Ecdsa(ecdsa) => {
-				let signature = ecdsa.sign_counterparty_commitment(&counterparty_initial_commitment_tx, Vec::new(), Vec::new(), &self.secp_ctx)
-					.map_err(|_| ChannelError::Close("Failed to get signatures for new commitment_signed".to_owned()))?.0;
-				Ok((initial_commitment_tx, counterparty_initial_commitment_tx, signature))
-			}
-		}
-	}
 	// Interactive transaction construction
 
 	#[cfg(dual_funding)]
-	pub fn begin_interactive_funding_tx_construction<ES: Deref, L: Deref>(
+	pub fn begin_interactive_funding_tx_construction<ES: Deref>(
 		&mut self, dual_funding_context: &DualFundingChannelContext, signer_provider: &SP,
 		entropy_source: &ES, holder_node_id: PublicKey, is_initiator: bool,
-		funding_inputs: Vec<(TxIn, Transaction)>, logger: &L,
+		funding_inputs: Vec<(TxIn, Transaction)>,
 	) -> Result<Option<InteractiveTxMessageSend>, APIError>
-	where ES::Target: EntropySource, L::Target: Logger
+	where ES::Target: EntropySource
 	{
 		// Check that vouts exist for each TxIn in provided transactions.
 		for (idx, input) in funding_inputs.iter().enumerate() {
@@ -3330,10 +3293,6 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 				let prev_funding_input = self.get_input_of_current_funding().unwrap(); // TODO err
 				funding_inputs_with_extra.push(prev_funding_input);
 			}
-
-			// Commit to post-splice parameters prematurely, to have right values for commitment building
-			// TODO: commitment should happen only upon confirmation
-			// let _ = self.commit_pending_splice(logger).unwrap();
 		}
 		for i in funding_inputs { // rest
 			funding_inputs_with_extra.push(i);
@@ -3502,8 +3461,6 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 		);
 
 		let _ = self.update_channel_value(post_channel_value, is_outgoing, logger); // TODO error
-
-		// TODO: update balance(s) !!!
 
 		// Reset funding tx
 		self.funding_transaction = None;
@@ -5393,8 +5350,6 @@ impl<SP: Deref> Channel<SP> where
 				matches!(self.context.channel_state, ChannelState::AwaitingChannelReady(flags) if !flags.is_set(AwaitingChannelReadyFlags::WAITING_FOR_BATCH)) ||
 				matches!(self.context.channel_state, ChannelState::ChannelReady(_))
 			{
-				// #SPLICING
-				// TODO move to a method in context, unbroadcast_transaction_take()
 				self.context.funding_transaction.take()
 			} else { None };
 		// That said, if the funding transaction is already confirmed (ie we're active with a
@@ -6554,7 +6509,6 @@ impl<SP: Deref> Channel<SP> where
 						} else {
 							if self.context.is_outbound() {
 								if !tx.is_coin_base() {
-									// TODO reenable
 									for input in tx.input.iter() {
 										if input.witness.is_empty() {
 											// We generated a malleable funding transaction, implying we've
@@ -7543,15 +7497,6 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 		Ok(chan)
 	}
 
-	/*
-	/// If an Err is returned, it is a ChannelError::Close (for get_funding_created)
-	/// #SPLICING: Impl. moved to ChannelContext
-	fn get_funding_created_signature<L: Deref>(&mut self, logger: &L)
-		 -> Result<(CommitmentTransaction, CommitmentTransaction, Signature), ChannelError> where L::Target: Logger {
-		self.context.get_funding_created_signature(logger)
-	}
-	*/
-
 	/// Only allowed after [`ChannelContext::channel_transaction_parameters`] is set.
 	fn get_funding_created_msg<L: Deref>(&mut self, logger: &L) -> Option<msgs::FundingCreated> where L::Target: Logger {
 		let counterparty_keys = self.context.build_remote_transaction_keys();
@@ -7610,19 +7555,6 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 
 		self.context.channel_transaction_parameters.funding_outpoint = Some(funding_txo);
 		self.context.holder_signer.as_mut().provide_channel_parameters(&self.context.channel_transaction_parameters);
-
-		/*
-		let signature = match self.get_funding_created_signature(logger) {
-			Ok((_, _, s)) => s,
-			Err(e) => {
-				log_error!(logger, "Got bad signatures: {:?}!", e);
-				self.context.channel_transaction_parameters.funding_outpoint = None;
-				return Err((self, e));
-			}
-		};
-
-		let temporary_channel_id = self.context.channel_id;
-		*/
 
 		// Now that we're past error-generating stuff, update our local state:
 
@@ -7989,8 +7921,23 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 		self.generate_accept_channel_message()
 	}
 
-	/// #SPLICE moved to ChannelContext from InboundV1Channel
-	//fn check_funding_created_signature<L: Deref>(&mut self, sig: &Signature, logger: &L) -> Result<CommitmentTransaction, ChannelError> where L::Target: Logger {
+	fn check_funding_created_signature<L: Deref>(&mut self, sig: &Signature, logger: &L) -> Result<CommitmentTransaction, ChannelError> where L::Target: Logger {
+		let funding_script = self.context.get_funding_redeemscript();
+
+		let keys = self.context.build_holder_transaction_keys(self.context.cur_holder_commitment_transaction_number);
+		let initial_commitment_tx = self.context.build_commitment_transaction(self.context.cur_holder_commitment_transaction_number, &keys, true, false, logger).tx;
+		let trusted_tx = initial_commitment_tx.trust();
+		let initial_commitment_bitcoin_tx = trusted_tx.built_transaction();
+		let sighash = initial_commitment_bitcoin_tx.get_sighash_all(&funding_script, self.context.channel_value_satoshis);
+		// They sign the holder commitment transaction...
+		log_trace!(logger, "Checking funding_created tx signature {} by key {} against tx {} (sighash {}) with redeemscript {} for channel {}.",
+			log_bytes!(sig.serialize_compact()[..]), log_bytes!(self.context.counterparty_funding_pubkey().serialize()),
+			encode::serialize_hex(&initial_commitment_bitcoin_tx.transaction), log_bytes!(sighash[..]),
+			encode::serialize_hex(&funding_script), &self.context.channel_id());
+		secp_check!(self.context.secp_ctx.verify_ecdsa(&sighash, &sig, self.context.counterparty_funding_pubkey()), "Invalid funding_created signature from peer".to_owned());
+
+		Ok(initial_commitment_tx)
+	}
 
 	pub fn funding_created<L: Deref>(
 		mut self, msg: &msgs::FundingCreated, best_block: BestBlock, signer_provider: &SP, logger: &L
@@ -8022,7 +7969,7 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 		// check_funding_created_signature may fail.
 		self.context.holder_signer.as_mut().provide_channel_parameters(&self.context.channel_transaction_parameters);
 
-		let initial_commitment_tx = match self.context.check_funding_created_signature(&msg.signature, logger) {
+		let initial_commitment_tx = match self.check_funding_created_signature(&msg.signature, logger) {
 			Ok(res) => res,
 			Err(ChannelError::Close(e)) => {
 				self.context.channel_transaction_parameters.funding_outpoint = None;
@@ -8206,13 +8153,13 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 		}
 	}
 
-	pub fn begin_interactive_funding_tx_construction<ES: Deref, L: Deref>(&mut self, signer_provider: &SP,
-		entropy_source: &ES, holder_node_id: PublicKey, funding_inputs: Vec<(TxIn, Transaction)>, logger: &L,
+	pub fn begin_interactive_funding_tx_construction<ES: Deref>(&mut self, signer_provider: &SP,
+		entropy_source: &ES, holder_node_id: PublicKey, funding_inputs: Vec<(TxIn, Transaction)>
 	) -> Result<Option<InteractiveTxMessageSend>, APIError>
-	where ES::Target: EntropySource, L::Target: Logger
+	where ES::Target: EntropySource,
 	{
 		self.context.begin_interactive_funding_tx_construction(&self.dual_funding_context,
-			signer_provider, entropy_source, holder_node_id, true /* is_initiator */, funding_inputs, logger)
+			signer_provider, entropy_source, holder_node_id, true /* is_initiator */, funding_inputs)
 	}
 
 	pub fn funding_tx_constructed<L: Deref>(
@@ -8534,13 +8481,13 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 		self.generate_accept_channel_v2_message()
 	}
 
-	pub fn begin_interactive_funding_tx_construction<ES: Deref, L: Deref>(&mut self, signer_provider: &SP,
-		entropy_source: &ES, holder_node_id: PublicKey, funding_inputs: Vec<(TxIn, Transaction)>, logger: &L,
+	pub fn begin_interactive_funding_tx_construction<ES: Deref>(&mut self, signer_provider: &SP,
+		entropy_source: &ES, holder_node_id: PublicKey, funding_inputs: Vec<(TxIn, Transaction)>,
 	) -> Result<Option<InteractiveTxMessageSend>, APIError>
-	where ES::Target: EntropySource, L::Target: Logger
+	where ES::Target: EntropySource
 	{
 		self.context.begin_interactive_funding_tx_construction(&self.dual_funding_context,
-			signer_provider, entropy_source, holder_node_id, false /* is_initiator */, funding_inputs, logger)
+			signer_provider, entropy_source, holder_node_id, false /* is_initiator */, funding_inputs)
 	}
 
 	/// #SPLICING

@@ -274,7 +274,7 @@ impl ChannelMessageHandler for ErroringMessageHandler {
 	fn handle_channel_reestablish(&self, their_node_id: &PublicKey, msg: &msgs::ChannelReestablish) {
 		ErroringMessageHandler::push_error(self, their_node_id, msg.channel_id);
 	}
-		// msgs::ChannelUpdate does not contain the channel_id field, so we just drop them.
+	// msgs::ChannelUpdate does not contain the channel_id field, so we just drop them.
 	fn handle_channel_update(&self, _their_node_id: &PublicKey, _msg: &msgs::ChannelUpdate) {}
 	fn peer_disconnected(&self, _their_node_id: &PublicKey) {}
 	fn peer_connected(&self, _their_node_id: &PublicKey, _init: &msgs::Init, _inbound: bool) -> Result<(), ()> { Ok(()) }
