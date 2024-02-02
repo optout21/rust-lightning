@@ -20,8 +20,8 @@
 use bitcoin::blockdata::block::Header;
 use bitcoin::blockdata::transaction::Transaction;
 use bitcoin::blockdata::constants::ChainHash;
-use bitcoin::locktime::absolute::LockTime;
 use bitcoin::key::constants::SECRET_KEY_SIZE;
+use bitcoin::locktime::absolute::LockTime;
 use bitcoin::network::constants::Network;
 
 use bitcoin::hashes::Hash;
@@ -2763,25 +2763,6 @@ where
 							chan.context.channel_id(), post_splice_v2_channel_id) });
 					}
 
-					// // Save the current funding transaction
-					// let pre_funding_transaction = chan.context.funding_transaction().clone(); // TODO check error
-					// let pre_funding_txo = chan.context.get_funding_txo().clone(); // TODO check error
-
-					// let pending_splice_post = PendingSpliceInfoPost::new(
-					// 	relative_satoshis, pre_channel_value, true,
-					// 	Some(chan.context.channel_id()),
-					// 	funding_feerate_perkw, locktime,
-					// 	pre_funding_transaction,
-					// 	pre_funding_txo,
-					// );
-					// chan.context.pending_splice_post = Some(pending_splice_post);
-
-					// let new_chan = Channel {
-					// 	context: chan.context,
-					// 	dual_funding_channel_context: None,
-					// 	interactive_tx_signing_session: None,
-					// };
-
 					let msg = chan.get_splice(self.chain_hash.clone(), relative_satoshis, funding_feerate_perkw, locktime);
 
 					peer_state.pending_msg_events.push(events::MessageSendEvent::SendSplice {
@@ -4221,27 +4202,6 @@ where
 							&self.entropy_source, self.get_our_node_id(), funding_inputs, &self.logger,
 						)?
 					},
-					/*
-					// This is neeed when Channel is not changed during splicing, and interactive
-					// transaction is constructed on the Funded channel. TODO: remove if new
-					// unfunded channel instance is used during splicing
-					ChannelPhase::Funded(chan) => {
-						if chan.context.pending_splice_post.is_some() {
-							let msg = chan.begin_interactive_funding_tx_construction(&self.signer_provider,
-								&self.entropy_source, self.get_our_node_id(), false, funding_inputs, &self.logger)?;
-
-							// Commit to post-splice parameters prematurely, to have right values for commitment building
-							// TODO: commitment should happen only upon confirmation
-							// let _ = chan.context.commit_pending_splice(&self.logger).unwrap();
-
-							msg
-						} else {
-							return Err(APIError::APIMisuseError {
-								err: format!("Channel is funded and in not actively splicing {}", chan.context.channel_id())
-							});
-						}
-					},
-					*/
 					_ => {
 						return Err(APIError::ChannelUnavailable {
 							err: format!("Channel with ID {} is not an unfunded V2 channel", counterparty_node_id) });
@@ -6977,10 +6937,6 @@ where
 				match channel_phase {
 					ChannelPhase::UnfundedInboundV2(_) |
 					ChannelPhase::UnfundedOutboundV2(_) => {
-					// This is neeed when Channel is not changed during splicing, and interactive
-					// transaction is constructed on the Funded channel. TODO: remove if new
-					// unfunded channel instance is used during splicing
-					// ChannelPhase::Funded(_) => {
 						let tx_msg = channel_phase.context_mut().tx_add_input(msg);
 						let msg_send_event = match tx_msg {
 							Ok(InteractiveTxMessageSend::TxAddInput(msg)) => events::MessageSendEvent::SendTxAddInput {
@@ -7024,10 +6980,6 @@ where
 				match channel_phase {
 					ChannelPhase::UnfundedInboundV2(_) |
 					ChannelPhase::UnfundedOutboundV2(_) => {
-					// This is neeed when Channel is not changed during splicing, and interactive
-					// transaction is constructed on the Funded channel. TODO: remove if new
-					// unfunded channel instance is used during splicing
-					// ChannelPhase::Funded(_) => {
 						let tx_msg = channel_phase.context_mut().tx_add_output(msg);
 						let msg_send_event = match tx_msg {
 							Ok(InteractiveTxMessageSend::TxAddInput(msg)) => events::MessageSendEvent::SendTxAddInput {
@@ -7155,10 +7107,6 @@ where
 				match channel_phase {
 					ChannelPhase::UnfundedInboundV2(_) |
 					ChannelPhase::UnfundedOutboundV2(_) => {
-					// This is neeed when Channel is not changed during splicing, and interactive
-					// transaction is constructed on the Funded channel. TODO: remove if new
-					// unfunded channel instance is used during splicing
-					// ChannelPhase::Funded(_) => {
 						let result = channel_phase.context_mut().tx_complete(msg);
 						match result {
 							Ok((tx_msg_opt, signing_session_opt)) => {
@@ -7190,18 +7138,6 @@ where
 												}
 											)
 										},
-										/*
-										// This is neeed when Channel is not changed during splicing, and interactive
-										// transaction is constructed on the Funded channel. TODO: remove if new
-										// unfunded channel instance is used during splicing
-										ChannelPhase::Funded(chan) => {
-											chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger).map_err(
-												|(chan, err)| {
-													(ChannelPhase::Funded(chan), err)
-												}
-											)
-										},
-										*/
 										_ => {
 											todo!();
 										},
