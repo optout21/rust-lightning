@@ -14,6 +14,7 @@ use core::ops::Deref;
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::consensus::Encodable;
 use bitcoin::policy::MAX_STANDARD_TX_WEIGHT;
+use bitcoin::ScriptBuf;
 use bitcoin::{
 	absolute::LockTime as AbsoluteLockTime, OutPoint, Sequence, Transaction, TxIn, TxOut,
 };
@@ -80,20 +81,87 @@ pub struct TxInputWithPrevOutput {
 	prev_output: TxOut,
 }
 
+#[derive(Debug, Clone)]
+pub struct SharedFundingInput {
+	txin: TxIn,
+	txout: TxOut,
+	to_remote_value_satoshis: u64,
+	to_local_value_satoshis: u64,
+}
+
 #[derive(Debug)]
 struct NegotiationContext {
 	holder_is_initiator: bool,
 	received_tx_add_input_count: u16,
 	received_tx_add_output_count: u16,
-	inputs: HashMap<SerialId, TxInputWithPrevOutput>,
+	/// If this negotiation is part of a splice, then this field will be Some and used as a shared
+	/// input.
+	shared_funding_input: Option<SharedFundingInput>,
+	/// How much the holder is contributing to the shared funding output.
+	///
+	/// NOTE: Can be negative in the case of a splice-out.
+	local_contribution_satoshis: i64,
+	/// How much the counterparty is contributing to the shared funding output.
+	///
+	/// NOTE: Can be negative in the case of a splice-out.
+	remote_contribution_satoshis: i64,
+	new_funding_output: TxOut,
+	/// The inputs to be contributed by the holder.
+	inputs: HashMap<SerialId, InteractiveTxInput>,
 	prevtx_outpoints: HashSet<OutPoint>,
-	outputs: HashMap<SerialId, TxOut>,
+	/// The outputs to be contributed by the holder.
+	outputs: HashMap<SerialId, InteractiveTxOutput>,
+	/// The locktime of the funding transaction.
 	tx_locktime: AbsoluteLockTime,
 	feerate_sat_per_kw: u32,
-	to_remote_value_satoshis: u64,
 }
 
 impl NegotiationContext {
+	fn new_funding_output_value_satoshis(&self) -> u64 {
+		let shared_funding_input_value =
+			self.shared_funding_input.as_ref().map(|input| input.txout.value).unwrap_or(0);
+		let contribution =
+			self.local_contribution_satoshis.saturating_add(self.remote_contribution_satoshis);
+
+		if contribution < 0 {
+			shared_funding_input_value.saturating_sub(contribution.saturating_abs().unsigned_abs())
+		} else {
+			shared_funding_input_value.saturating_add(contribution.saturating_abs().unsigned_abs())
+		}
+	}
+
+	fn funding_output_remote_value_satoshis(&self) -> u64 {
+		let remote_shared_input_value = self
+			.shared_funding_input
+			.as_ref()
+			.map(|input| input.to_remote_value_satoshis)
+			.unwrap_or(0);
+
+		if self.remote_contribution_satoshis < 0 {
+			remote_shared_input_value
+				.saturating_sub(self.remote_contribution_satoshis.saturating_abs().unsigned_abs())
+		} else {
+			remote_shared_input_value
+				.saturating_add(self.remote_contribution_satoshis.saturating_abs().unsigned_abs())
+		}
+	}
+
+	fn funding_output_local_value_satoshis(&self) -> u64 {
+		let local_shared_input_value = self
+			.shared_funding_input
+			.as_ref()
+			.map(|input| input.to_local_value_satoshis)
+			.unwrap_or(0);
+
+		if self.local_contribution_satoshis < 0 {
+			local_shared_input_value
+				.saturating_sub(self.local_contribution_satoshis.saturating_abs().unsigned_abs())
+		} else {
+			local_shared_input_value
+				.saturating_add(self.local_contribution_satoshis.saturating_abs().unsigned_abs())
+		}
+	}
+
 	fn is_serial_id_valid_for_counterparty(&self, serial_id: &SerialId) -> bool {
 		// A received `SerialId`'s parity must match the role of the counterparty.
 		self.holder_is_initiator == serial_id.is_for_non_initiator()
@@ -103,16 +171,16 @@ impl NegotiationContext {
 		self.inputs.len().saturating_add(self.outputs.len())
 	}
 
-	fn counterparty_inputs_contributed(
-		&self,
-	) -> impl Iterator<Item = &TxInputWithPrevOutput> + Clone {
+	fn counterparty_inputs_contributed(&self) -> impl Iterator<Item = &InteractiveTxInput> + Clone {
 		self.inputs
 			.iter()
 			.filter(move |(serial_id, _)| self.is_serial_id_valid_for_counterparty(serial_id))
 			.map(|(_, input_with_prevout)| input_with_prevout)
 	}
 
-	fn counterparty_outputs_contributed(&self) -> impl Iterator<Item = &TxOut> + Clone {
+	fn counterparty_outputs_contributed(
+		&self,
+	) -> impl Iterator<Item = &InteractiveTxOutput> + Clone {
 		self.outputs
 			.iter()
 			.filter(move |(serial_id, _)| self.is_serial_id_valid_for_counterparty(serial_id))
@@ -148,7 +216,7 @@ impl NegotiationContext {
 		}
 
 		let transaction = msg.prevtx.as_transaction();
-		let txid = transaction.txid();
+		let txid = msg.shared_input_txid.unwrap_or(transaction.txid());
 
 		if let Some(tx_out) = transaction.output.get(msg.prevtx_out as usize) {
 			if !tx_out.script_pubkey.is_witness_program() {
@@ -165,33 +233,73 @@ impl NegotiationContext {
 				//       (and not removed) input's
 				return Err(AbortReason::PrevTxOutInvalid);
 			}
-		} else {
+		} else if msg.shared_input_txid.is_none() {
 			// The receiving node:
 			//  - MUST fail the negotiation if:
 			//     - `prevtx_vout` is greater or equal to the number of outputs on `prevtx`
 			return Err(AbortReason::PrevTxOutInvalid);
 		}
 
-		let prev_out = if let Some(prev_out) = transaction.output.get(msg.prevtx_out as usize) {
-			prev_out.clone()
-		} else {
-			return Err(AbortReason::PrevTxOutInvalid);
-		};
-		if self.inputs.iter().any(|(serial_id, _)| *serial_id == msg.serial_id) {
-			// The receiving node:
-			//  - MUST fail the negotiation if:
-			//    - the `serial_id` is already included in the transaction
-			return Err(AbortReason::DuplicateSerialId);
-		}
 		let prev_outpoint = OutPoint { txid, vout: msg.prevtx_out };
-		self.inputs.entry(msg.serial_id).or_insert_with(|| TxInputWithPrevOutput {
-			input: TxIn {
-				previous_output: prev_outpoint.clone(),
-				sequence: Sequence(msg.sequence),
-				..Default::default()
+		match self.inputs.entry(msg.serial_id) {
+			hash_map::Entry::Occupied(_) => {
+				// The receiving node:
+				//  - MUST fail the negotiation if:
+				//    - the `serial_id` is already included in the transaction
+				return Err(AbortReason::DuplicateSerialId);
 			},
-			prev_output: prev_out,
-		});
+			hash_map::Entry::Vacant(entry) => {
+				let txin = TxIn {
+					previous_output: prev_outpoint.clone(),
+					sequence: Sequence(msg.sequence),
+					..Default::default()
+				};
+				let vout = txin.previous_output.vout as usize;
+				let input = if msg
+					.shared_input_txid
+					.and_then(|txid| {
+						self.shared_funding_input
+							.as_ref()
+							.map(|input| txid == input.txin.previous_output.txid)
+					})
+					.unwrap_or(false)
+				{
+					InteractiveTxInput::Shared(SharedInput {
+						serial_id: msg.serial_id,
+						txin,
+						prevout_value: self
+							.shared_funding_input
+							.as_ref()
+							.map(|input| input.txout.value)
+							.unwrap_or(0),
+						to_remote_value_satoshis: self
+							.shared_funding_input
+							.as_ref()
+							.map(|input| input.to_remote_value_satoshis)
+							.unwrap_or(0),
+						to_local_value_satoshis: self
+							.shared_funding_input
+							.as_ref()
+							.map(|input| input.to_local_value_satoshis)
+							.unwrap_or(0),
+					})
+				} else {
+					InteractiveTxInput::Remote(RemoteInput {
+						serial_id: msg.serial_id,
+						txin,
+						prev_tx: msg.prevtx.clone(),
+						prevout_value: msg
+							.prevtx
+							.as_transaction()
+							.output
+							.get(vout)
+							.ok_or(AbortReason::PrevTxOutInvalid)?
+							.value,
+					})
+				};
+				entry.insert(input);
+			},
+		}
 		self.prevtx_outpoints.insert(prev_outpoint);
 		Ok(())
 	}
@@ -238,7 +346,7 @@ impl NegotiationContext {
 		// bitcoin supply.
 		let mut outputs_value: u64 = 0;
 		for output in self.outputs.iter() {
-			outputs_value = outputs_value.saturating_add(output.1.value);
+			outputs_value = outputs_value.saturating_add(output.1.value());
 		}
 		if outputs_value.saturating_add(msg.sats) > TOTAL_BITCOIN_SUPPLY_SATOSHIS {
 			// The receiving node:
@@ -256,22 +364,41 @@ impl NegotiationContext {
 		// with witness versions V1 and up are always considered standard. Yes, the scripts can be
 		// anyone-can-spend-able, but if our counterparty wants to add an output like that then it's none
 		// of our concern really ¯\_(ツ)_/¯
-		if !msg.script.is_v0_p2wpkh()
-			&& !msg.script.is_v0_p2wsh()
-			&& msg.script.witness_version().map(|v| v.to_num() < 1).unwrap_or(true)
+		//
+		// TODO: The last check would be simplified when https://github.com/rust-bitcoin/rust-bitcoin/commit/1656e1a09a1959230e20af90d20789a4a8f0a31b
+		// hits the next release of rust-bitcoin.
+		if !(msg.script.is_v0_p2wpkh()
+			|| msg.script.is_v0_p2wsh()
+			|| (msg.script.is_witness_program()
+				&& msg.script.witness_version().map(|v| v.to_num() >= 1).unwrap_or(false)))
 		{
 			return Err(AbortReason::InvalidOutputScript);
 		}
 
-		if self.outputs.iter().any(|(serial_id, _)| *serial_id == msg.serial_id) {
-			// The receiving node:
-			//  - MUST fail the negotiation if:
-			//    - the `serial_id` is already included in the transaction
-			return Err(AbortReason::DuplicateSerialId);
-		}
-
-		let output = TxOut { value: msg.sats, script_pubkey: msg.script.clone() };
-		self.outputs.entry(msg.serial_id).or_insert(output);
+		let output = if msg.script == self.new_funding_output.script_pubkey {
+			InteractiveTxOutput::Shared(SharedOutput {
+				serial_id: msg.serial_id,
+				txout: TxOut { value: msg.sats, script_pubkey: msg.script.clone() },
+				to_remote_value_satoshis: self.funding_output_remote_value_satoshis(),
+				to_local_value_satoshis: self.funding_output_local_value_satoshis(),
+			})
+		} else {
+			InteractiveTxOutput::Remote(RemoteOutput {
+				serial_id: msg.serial_id,
+				txout: TxOut { value: msg.sats, script_pubkey: msg.script.clone() },
+			})
+		};
+		match self.outputs.entry(msg.serial_id) {
+			hash_map::Entry::Occupied(_) => {
+				// The receiving node:
+				//  - MUST fail the negotiation if:
+				//    - the `serial_id` is already included in the transaction
+				return Err(AbortReason::DuplicateSerialId);
+			},
+			hash_map::Entry::Vacant(entry) => {
+				entry.insert(output);
+			},
+		};
 		Ok(())
 	}
 
@@ -290,54 +417,111 @@ impl NegotiationContext {
 		}
 	}
 
-	fn sent_tx_add_input(&mut self, msg: &msgs::TxAddInput) {
+	fn sent_tx_add_input(&mut self, msg: &msgs::TxAddInput) -> Result<(), AbortReason> {
 		let tx = msg.prevtx.as_transaction();
-		let input = TxIn {
+		let txin = TxIn {
 			previous_output: OutPoint { txid: tx.txid(), vout: msg.prevtx_out },
 			sequence: Sequence(msg.sequence),
 			..Default::default()
 		};
-		debug_assert!((msg.prevtx_out as usize) < tx.output.len());
-		let prev_output = &tx.output[msg.prevtx_out as usize];
-		self.prevtx_outpoints.insert(input.previous_output.clone());
-		self.inputs.insert(
-			msg.serial_id,
-			TxInputWithPrevOutput { input, prev_output: prev_output.clone() },
-		);
+		if !self.prevtx_outpoints.insert(txin.previous_output.clone()) {
+			// We have added an input that already exists
+			return Err(AbortReason::PrevTxOutInvalid);
+		}
+		let vout = txin.previous_output.vout as usize;
+		let input = if let Some(_) = msg.shared_input_txid {
+			InteractiveTxInput::Shared(SharedInput {
+				serial_id: msg.serial_id,
+				txin: self
+					.shared_funding_input
+					.as_ref()
+					.map(|input| input.txin.clone())
+					.unwrap_or(txin),
+				prevout_value: self
+					.shared_funding_input
+					.as_ref()
+					.map(|input| input.txout.value)
+					.unwrap_or(0),
+				to_remote_value_satoshis: self
+					.shared_funding_input
+					.as_ref()
+					.map(|input| input.to_remote_value_satoshis)
+					.unwrap_or(0),
+				to_local_value_satoshis: self
+					.shared_funding_input
+					.as_ref()
+					.map(|input| input.to_local_value_satoshis)
+					.unwrap_or(0),
+			})
+		} else {
+			InteractiveTxInput::Local(LocalInput {
+				serial_id: msg.serial_id,
+				txin,
+				prev_tx: msg.prevtx.clone(),
+				prevout_value: msg
+					.prevtx
+					.as_transaction()
+					.output
+					.get(vout)
+					.ok_or(AbortReason::PrevTxOutInvalid)?
+					.value,
+			})
+		};
+		self.inputs.insert(msg.serial_id, input);
+		Ok(())
 	}
 
-	fn sent_tx_add_output(&mut self, msg: &msgs::TxAddOutput) {
-		self.outputs
-			.insert(msg.serial_id, TxOut { value: msg.sats, script_pubkey: msg.script.clone() });
+	fn sent_tx_add_output(&mut self, msg: &msgs::TxAddOutput) -> Result<(), AbortReason> {
+		let txout = TxOut { value: msg.sats, script_pubkey: msg.script.clone() };
+		let output = if msg.script == self.new_funding_output.script_pubkey {
+			InteractiveTxOutput::Shared(SharedOutput {
+				serial_id: msg.serial_id,
+				txout,
+				to_remote_value_satoshis: self.funding_output_remote_value_satoshis(),
+				to_local_value_satoshis: self.funding_output_local_value_satoshis(),
+			})
+		} else {
+			InteractiveTxOutput::Local(LocalOutput { serial_id: msg.serial_id, txout })
+		};
+		self.outputs.insert(msg.serial_id, output);
+		Ok(())
 	}
 
-	fn sent_tx_remove_input(&mut self, msg: &msgs::TxRemoveInput) {
+	fn sent_tx_remove_input(&mut self, msg: &msgs::TxRemoveInput) -> Result<(), AbortReason> {
 		self.inputs.remove(&msg.serial_id);
+		Ok(())
 	}
 
-	fn sent_tx_remove_output(&mut self, msg: &msgs::TxRemoveOutput) {
+	fn sent_tx_remove_output(&mut self, msg: &msgs::TxRemoveOutput) -> Result<(), AbortReason> {
 		self.outputs.remove(&msg.serial_id);
+		Ok(())
 	}
 
 	fn build_transaction(self) -> Result<Transaction, AbortReason> {
 		// The receiving node:
 		// MUST fail the negotiation if:
 
-		// - the peer's total input satoshis is less than their outputs
-		let mut counterparty_inputs_value: u64 = 0;
-		let mut counterparty_outputs_value: u64 = 0;
+		// - the peer's total input satoshis with its part of any shared input is less than their outputs
+		//   and proportion of any shared output
+		let mut counterparty_value_in: u64 = 0;
+		let mut counterparty_value_out: u64 = 0;
 		for input in self.counterparty_inputs_contributed() {
-			counterparty_inputs_value =
-				counterparty_inputs_value.saturating_add(input.prev_output.value);
+			let value = match input {
+				InteractiveTxInput::Local(input) => input.prevout_value,
+				InteractiveTxInput::Remote(input) => input.prevout_value,
+				InteractiveTxInput::Shared(input) => input.to_remote_value_satoshis,
+			};
+			counterparty_value_in = counterparty_value_in.saturating_add(value);
 		}
 		for output in self.counterparty_outputs_contributed() {
-			counterparty_outputs_value = counterparty_outputs_value.saturating_add(output.value);
+			let value = match output {
+				InteractiveTxOutput::Local(output) => output.txout.value,
+				InteractiveTxOutput::Remote(output) => output.txout.value,
+				InteractiveTxOutput::Shared(output) => output.to_remote_value_satoshis,
+			};
+			counterparty_value_out = counterparty_value_out.saturating_add(value);
 		}
-		// ...actually the counterparty might be splicing out, so that their balance also contributes
-		// to the total input value.
-		if counterparty_inputs_value.saturating_add(self.to_remote_value_satoshis)
-			< counterparty_outputs_value
-		{
+		if counterparty_value_in < counterparty_value_out {
 			return Err(AbortReason::OutputsValueExceedsInputsValue);
 		}
 
@@ -353,17 +537,17 @@ impl NegotiationContext {
 		const INPUT_WEIGHT: u64 = BASE_INPUT_WEIGHT + EMPTY_SCRIPT_SIG_WEIGHT;
 
 		// - the peer's paid feerate does not meet or exceed the agreed feerate (based on the minimum fee).
-		let counterparty_output_weight_contributed: u64 = self
+		let mut counterparty_weight_contributed: u64 = self
 			.counterparty_outputs_contributed()
 			.map(|output| {
-				(8 /* value */ + output.script_pubkey.consensus_encode(&mut sink()).unwrap() as u64)
+				(8 /* value */ + output.script_pubkey().consensus_encode(&mut sink()).unwrap() as u64)
 					* WITNESS_SCALE_FACTOR as u64
 			})
 			.sum();
-		let counterparty_weight_contributed = counterparty_output_weight_contributed
-			+ self.counterparty_inputs_contributed().count() as u64 * INPUT_WEIGHT;
+		counterparty_weight_contributed +=
+			self.counterparty_inputs_contributed().count() as u64 * INPUT_WEIGHT;
 		let counterparty_fees_contributed =
-			counterparty_inputs_value.saturating_sub(counterparty_outputs_value);
+			counterparty_value_in.saturating_sub(counterparty_value_out);
 		let mut required_counterparty_contribution_fee =
 			fee_for_weight(self.feerate_sat_per_kw, counterparty_weight_contributed);
 		if !self.holder_is_initiator {
@@ -390,8 +574,22 @@ impl NegotiationContext {
 		let tx_to_validate = Transaction {
 			version: 2,
 			lock_time: self.tx_locktime,
-			input: inputs.into_iter().map(|(_, input)| input.input).collect(),
-			output: outputs.into_iter().map(|(_, output)| output).collect(),
+			input: inputs
+				.into_iter()
+				.map(|(_, input)| match input {
+					InteractiveTxInput::Local(input) => input.txin,
+					InteractiveTxInput::Remote(input) => input.txin,
+					InteractiveTxInput::Shared(input) => input.txin,
+				})
+				.collect(),
+			output: outputs
+				.into_iter()
+				.map(|(_, output)| match output {
+					InteractiveTxOutput::Local(output) => output.txout,
+					InteractiveTxOutput::Remote(output) => output.txout,
+					InteractiveTxOutput::Shared(output) => output.txout,
+				})
+				.collect(),
 		};
 		if tx_to_validate.weight().to_wu() > MAX_STANDARD_TX_WEIGHT as u64 {
 			return Err(AbortReason::TransactionTooLarge);
@@ -517,7 +715,7 @@ macro_rules! define_state_transitions {
 			impl<S: ReceivedMsgState> StateTransition<SentChangeMsg, $data> for S {
 				fn transition(self, data: $data) -> StateTransitionResult<SentChangeMsg> {
 					let mut context = self.into_negotiation_context();
-					context.$transition(data);
+					context.$transition(data)?;
 					Ok(SentChangeMsg(context))
 				}
 			}
@@ -598,7 +796,8 @@ macro_rules! define_state_machine_transitions {
 impl StateMachine {
 	fn new(
 		feerate_sat_per_kw: u32, is_initiator: bool, tx_locktime: AbsoluteLockTime,
-		to_remote_value_satoshis: u64,
+		shared_funding_input: Option<SharedFundingInput>, new_funding_output: TxOut,
+		remote_contribution_satoshis: i64, local_contribution_satoshis: i64,
 	) -> Self {
 		let context = NegotiationContext {
 			tx_locktime,
@@ -609,7 +808,10 @@ impl StateMachine {
 			prevtx_outpoints: new_hash_set(),
 			outputs: new_hash_map(),
 			feerate_sat_per_kw,
-			to_remote_value_satoshis,
+			shared_funding_input,
+			local_contribution_satoshis,
+			remote_contribution_satoshis,
+			new_funding_output,
 		};
 		if is_initiator {
 			Self::ReceivedChangeMsg(ReceivedChangeMsg(context))
@@ -669,11 +871,130 @@ impl StateMachine {
 	]);
 }
 
+#[derive(Debug)]
+pub struct LocalInput {
+	serial_id: SerialId,
+	txin: TxIn,
+	prev_tx: TransactionU16LenLimited,
+	prevout_value: u64,
+}
+
+#[derive(Debug)]
+pub struct RemoteInput {
+	serial_id: SerialId,
+	txin: TxIn,
+	prev_tx: TransactionU16LenLimited,
+	prevout_value: u64,
+}
+
+#[derive(Debug)]
+pub struct SharedInput {
+	serial_id: SerialId,
+	txin: TxIn,
+	prevout_value: u64,
+	to_remote_value_satoshis: u64,
+	to_local_value_satoshis: u64,
+}
+
+#[derive(Debug)]
+pub enum InteractiveTxInput {
+	Local(LocalInput),
+	Remote(RemoteInput),
+	Shared(SharedInput),
+}
+
+#[derive(Debug)]
+pub struct LocalOutput {
+	serial_id: SerialId,
+	txout: TxOut,
+}
+
+#[derive(Debug)]
+pub struct RemoteOutput {
+	serial_id: SerialId,
+	txout: TxOut,
+}
+
+#[derive(Debug)]
+pub struct SharedOutput {
+	serial_id: SerialId,
+	txout: TxOut,
+	to_remote_value_satoshis: u64,
+	to_local_value_satoshis: u64,
+}
+
+impl InteractiveTxInput {
+	pub fn serial_id(&self) -> SerialId {
+		match self {
+			InteractiveTxInput::Local(input) => input.serial_id,
+			InteractiveTxInput::Remote(input) => input.serial_id,
+			InteractiveTxInput::Shared(input) => input.serial_id,
+		}
+	}
+
+	pub fn txin(&self) -> &TxIn {
+		match self {
+			InteractiveTxInput::Local(input) => &input.txin,
+			InteractiveTxInput::Remote(input) => &input.txin,
+			InteractiveTxInput::Shared(input) => &input.txin,
+		}
+	}
+
+	pub fn value(&self) -> Result<u64, AbortReason> {
+		Ok(match self {
+			InteractiveTxInput::Local(input) => input.prevout_value,
+			InteractiveTxInput::Remote(input) => input.prevout_value,
+			InteractiveTxInput::Shared(input) => input.prevout_value,
+		})
+	}
+}
+
+impl InteractiveTxOutput {
+	pub fn serial_id(&self) -> SerialId {
+		match self {
+			InteractiveTxOutput::Local(output) => output.serial_id,
+			InteractiveTxOutput::Remote(output) => output.serial_id,
+			InteractiveTxOutput::Shared(output) => output.serial_id,
+		}
+	}
+
+	pub fn value(&self) -> u64 {
+		match self {
+			InteractiveTxOutput::Local(output) => output.txout.value,
+			InteractiveTxOutput::Remote(output) => output.txout.value,
+			InteractiveTxOutput::Shared(output) => output.txout.value,
+		}
+	}
+
+	pub fn script_pubkey(&self) -> &ScriptBuf {
+		match self {
+			InteractiveTxOutput::Local(output) => &output.txout.script_pubkey,
+			InteractiveTxOutput::Remote(output) => &output.txout.script_pubkey,
+			InteractiveTxOutput::Shared(output) => &output.txout.script_pubkey,
+		}
+	}
+
+	pub fn txout(&self) -> &TxOut {
+		match self {
+			InteractiveTxOutput::Local(output) => &output.txout,
+			InteractiveTxOutput::Remote(output) => &output.txout,
+			InteractiveTxOutput::Shared(output) => &output.txout,
+		}
+	}
+}
+
+#[derive(Debug)]
+pub enum InteractiveTxOutput {
+	Local(LocalOutput),
+	Remote(RemoteOutput),
+	Shared(SharedOutput),
+}
+
 pub struct InteractiveTxConstructor {
 	state_machine: StateMachine,
 	channel_id: ChannelId,
-	inputs_to_contribute: Vec<(SerialId, TxIn, TransactionU16LenLimited)>,
-	outputs_to_contribute: Vec<(SerialId, TxOut)>,
+	inputs_to_contribute: Vec<InteractiveTxInput>,
+	outputs_to_contribute: Vec<InteractiveTxOutput>,
 }
 
 pub enum InteractiveTxMessageSend {
@@ -726,8 +1047,11 @@ impl InteractiveTxConstructor {
 		entropy_source: &ES, channel_id: ChannelId, feerate_sat_per_kw: u32, is_initiator: bool,
 		funding_tx_locktime: AbsoluteLockTime,
 		inputs_to_contribute: Vec<(TxIn, TransactionU16LenLimited)>,
-		outputs_to_contribute: Vec<TxOut>, to_remote_value_satoshis: u64,
-	) -> (Self, Option<InteractiveTxMessageSend>)
+		outputs_to_contribute: Vec<TxOut>, shared_funding_input: Option<SharedFundingInput>,
+		new_funding_output: TxOut, remote_contribution_satoshis: i64,
+		local_contribution_satoshis: i64,
+	) -> Result<(Self, Option<InteractiveTxMessageSend>), String>
+	// TODO: Better error
 	where
 		ES::Target: EntropySource,
 	{
@@ -735,31 +1059,59 @@ impl InteractiveTxConstructor {
 			feerate_sat_per_kw,
 			is_initiator,
 			funding_tx_locktime,
-			to_remote_value_satoshis,
+			shared_funding_input.clone(),
+			new_funding_output,
+			remote_contribution_satoshis,
+			local_contribution_satoshis,
 		);
-		let mut inputs_to_contribute: Vec<(SerialId, TxIn, TransactionU16LenLimited)> =
-			inputs_to_contribute
-				.into_iter()
-				.map(|(input, tx)| {
-					let serial_id = generate_holder_serial_id(entropy_source, is_initiator);
-					(serial_id, input, tx)
-				})
-				.collect();
+		let mut inputs: Vec<InteractiveTxInput> = Vec::with_capacity(inputs_to_contribute.len());
+		for input in inputs_to_contribute {
+			let (txin, prev_tx) = input;
+			let serial_id = generate_holder_serial_id(entropy_source, is_initiator);
+			let prevout_value = prev_tx
+				.as_transaction()
+				.output
+				.get(txin.previous_output.vout as usize)
+				.ok_or(format!(
+					"The previous output's vout ({}) out of range of previous tx's ({}) {} outputs",
+					txin.previous_output.vout,
+					prev_tx.as_transaction().txid(),
+					prev_tx.as_transaction().input.len()
+				))?
+				.value;
+			inputs.push(InteractiveTxInput::Local(LocalInput {
+				serial_id,
+				txin,
+				prev_tx,
+				prevout_value,
+			}));
+		}
+		if is_initiator {
+			if let Some(shared_funding_input) = shared_funding_input {
+				inputs.push(InteractiveTxInput::Shared(SharedInput {
+					serial_id: generate_holder_serial_id(entropy_source, is_initiator),
+					txin: shared_funding_input.txin,
+					prevout_value: shared_funding_input.txout.value,
+					to_remote_value_satoshis: shared_funding_input.to_remote_value_satoshis,
+					to_local_value_satoshis: shared_funding_input.to_local_value_satoshis,
+				}))
+			}
+		}
 		// We'll sort by the randomly generated serial IDs, effectively shuffling the order of the inputs
 		// as the user passed them to us to avoid leaking any potential categorization of transactions
 		// before we pass any of the inputs to the counterparty.
-		inputs_to_contribute.sort_unstable_by_key(|(serial_id, _, _)| *serial_id);
-		let mut outputs_to_contribute: Vec<(SerialId, TxOut)> = outputs_to_contribute
+		inputs.sort_unstable_by_key(|input| input.serial_id());
+		let mut outputs_to_contribute: Vec<InteractiveTxOutput> = outputs_to_contribute
 			.into_iter()
-			.map(|output| {
+			.map(|txout| {
 				let serial_id = generate_holder_serial_id(entropy_source, is_initiator);
-				(serial_id, output)
+				InteractiveTxOutput::Local(LocalOutput { serial_id, txout })
 			})
 			.collect();
 		// In the same manner and for the same rationale as the inputs above, we'll shuffle the outputs.
-		outputs_to_contribute.sort_unstable_by_key(|(serial_id, _)| *serial_id);
+		outputs_to_contribute.sort_unstable_by_key(|output| output.serial_id());
 		let mut constructor =
-			Self { state_machine, channel_id, inputs_to_contribute, outputs_to_contribute };
+			Self { state_machine, channel_id, inputs_to_contribute: inputs, outputs_to_contribute };
 		let message_send = if is_initiator {
 			match constructor.maybe_send_message() {
 				Ok(msg_send) => Some(msg_send),
@@ -774,28 +1126,54 @@ impl InteractiveTxConstructor {
 		} else {
 			None
 		};
-		(constructor, message_send)
+		Ok((constructor, message_send))
 	}
 
 	fn maybe_send_message(&mut self) -> Result<InteractiveTxMessageSend, AbortReason> {
 		// We first attempt to send inputs we want to add, then outputs. Once we are done sending
 		// them both, then we always send tx_complete.
-		if let Some((serial_id, input, prevtx)) = self.inputs_to_contribute.pop() {
+		if let Some(input) = self.inputs_to_contribute.pop() {
+			let (serial_id, prevtx, txin, shared_input_txid) = match input {
+				InteractiveTxInput::Local(i) => (i.serial_id, i.prev_tx, i.txin, None),
+				InteractiveTxInput::Remote(i) => (i.serial_id, i.prev_tx, i.txin, None),
+				InteractiveTxInput::Shared(i) => {
+					let txid = i.txin.previous_output.txid;
+					(
+						i.serial_id,
+						TransactionU16LenLimited::new(Transaction {
+							version: 2,
+							lock_time: AbsoluteLockTime::from_height(1)
+								.map_err(|_| AbortReason::PrevTxOutInvalid)?,
+							input: vec![],
+							output: vec![],
+						})
+						.map_err(|_| AbortReason::PrevTxOutInvalid)?,
+						i.txin,
+						Some(txid),
+					)
+				},
+			};
 			let msg = msgs::TxAddInput {
 				channel_id: self.channel_id,
 				serial_id,
 				prevtx,
-				prevtx_out: input.previous_output.vout,
-				sequence: input.sequence.to_consensus_u32(),
+				prevtx_out: txin.previous_output.vout,
+				sequence: txin.sequence.to_consensus_u32(),
+				shared_input_txid,
 			};
 			do_state_transition!(self, sent_tx_add_input, &msg)?;
 			Ok(InteractiveTxMessageSend::TxAddInput(msg))
-		} else if let Some((serial_id, output)) = self.outputs_to_contribute.pop() {
+		} else if let Some(output) = self.outputs_to_contribute.pop() {
+			let (serial_id, txout) = match output {
+				InteractiveTxOutput::Local(o) => (o.serial_id, o.txout),
+				InteractiveTxOutput::Remote(o) => (o.serial_id, o.txout),
+				InteractiveTxOutput::Shared(o) => (o.serial_id, o.txout),
+			};
 			let msg = msgs::TxAddOutput {
 				channel_id: self.channel_id,
 				serial_id,
-				sats: output.value,
-				script: output.script_pubkey,
+				sats: txout.value,
+				script: txout.script_pubkey,
 			};
 			do_state_transition!(self, sent_tx_add_output, &msg)?;
 			Ok(InteractiveTxMessageSend::TxAddOutput(msg))
@@ -888,6 +1266,8 @@ mod tests {
 	};
 	use core::ops::Deref;
 
+	use super::SharedFundingInput;
+
 	// A simple entropy source that works based on an atomic counter.
 	struct TestEntropySource(AtomicCounter);
 	impl EntropySource for TestEntropySource {
@@ -933,7 +1313,12 @@ mod tests {
 		outputs_a: Vec<TxOut>,
 		inputs_b: Vec<(TxIn, TransactionU16LenLimited)>,
 		outputs_b: Vec<TxOut>,
+		shared_funding_input: Option<SharedFundingInput>,
+		new_funding_output: TxOut,
+		b_funding_satoshis: i64,
+		a_funding_satoshis: i64,
 		expect_error: Option<(AbortReason, ErrorCulprit)>,
+		description: String,
 	}
 
 	fn do_test_interactive_tx_constructor(session: TestSession) {
@@ -965,8 +1350,12 @@ mod tests {
 			tx_locktime,
 			session.inputs_a,
 			session.outputs_a,
-			0,
-		);
+			session.shared_funding_input.clone(),
+			session.new_funding_output.clone(),
+			session.b_funding_satoshis,
+			session.a_funding_satoshis,
+		)
+		.unwrap();
 		let (mut constructor_b, first_message_b) = InteractiveTxConstructor::new(
 			entropy_source,
 			channel_id,
@@ -975,8 +1364,12 @@ mod tests {
 			tx_locktime,
 			session.inputs_b,
 			session.outputs_b,
-			0,
-		);
+			session.shared_funding_input,
+			session.new_funding_output,
+			session.b_funding_satoshis,
+			session.a_funding_satoshis,
+		)
+		.unwrap();
 
 		let handle_message_send =
 			|msg: InteractiveTxMessageSend, for_constructor: &mut InteractiveTxConstructor| {
@@ -1020,8 +1413,13 @@ mod tests {
 							},
 							_ => ErrorCulprit::NodeA,
 						};
-						assert_eq!(Some((abort_reason, error_culprit)), session.expect_error);
-						assert!(message_send_b.is_none());
+						assert_eq!(
+							Some((abort_reason, error_culprit)),
+							session.expect_error,
+							"Test: {}",
+							session.description
+						);
+						assert!(message_send_b.is_none(), "Test: {}", session.description);
 						return;
 					},
 				}
@@ -1039,8 +1437,13 @@ mod tests {
 							},
 							_ => ErrorCulprit::NodeB,
 						};
-						assert_eq!(Some((abort_reason, error_culprit)), session.expect_error);
-						assert!(message_send_a.is_none());
+						assert_eq!(
+							Some((abort_reason, error_culprit)),
+							session.expect_error,
+							"Test: {}",
+							session.description
+						);
+						assert!(message_send_a.is_none(), "Test: {}", session.description);
 						return;
 					},
 				}
@@ -1071,6 +1474,21 @@ mod tests {
 						.to_v0_p2wsh(),
 				})
 				.collect(),
+		}
+	}
+
+	fn generate_shared_input(value: u64, to_remote: u64, to_local: u64) -> SharedFundingInput {
+		let tx = generate_tx_with_locktime(&[value], 1111);
+		SharedFundingInput {
+			txin: TxIn {
+				previous_output: OutPoint { txid: tx.txid(), vout: 0u32 },
+				script_sig: Default::default(),
+				sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+				witness: Default::default(),
+			},
+			txout: TxOut { value, script_pubkey: Default::default() },
+			to_remote_value_satoshis: to_remote,
+			to_local_value_satoshis: to_local,
 		}
 	}
 
@@ -1160,51 +1578,81 @@ mod tests {
 	fn test_interactive_tx_constructor() {
 		// No contributions.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "No contributions".into(),
 			inputs_a: vec![],
 			outputs_a: vec![],
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::InsufficientFees, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Single contribution, no initiator inputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Single contribution, no initiator inputs".into(),
 			inputs_a: vec![],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::OutputsValueExceedsInputsValue, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Single contribution, no initiator outputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Single contribution, no initiator outputs".into(),
 			inputs_a: generate_inputs(&[1_000_000]),
 			outputs_a: vec![],
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: None,
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Single contribution, insufficient fees.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Single contribution, insufficient fees".into(),
 			inputs_a: generate_inputs(&[1_000_000]),
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::InsufficientFees, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Initiator contributes sufficient fees, but non-initiator does not.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator contributes sufficient fees, but non-initiator does not".into(),
 			inputs_a: generate_inputs(&[1_000_000]),
 			outputs_a: vec![],
 			inputs_b: generate_inputs(&[100_000]),
 			outputs_b: generate_outputs(&[100_000]),
 			expect_error: Some((AbortReason::InsufficientFees, ErrorCulprit::NodeB)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Multi-input-output contributions from both sides.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Multi-input-output contributions from both sides".into(),
 			inputs_a: generate_inputs(&[1_000_000, 1_000_000]),
 			outputs_a: generate_outputs(&[1_000_000, 200_000]),
 			inputs_b: generate_inputs(&[1_000_000, 500_000]),
 			outputs_b: generate_outputs(&[1_000_000, 400_000]),
 			expect_error: None,
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 
 		// Prevout from initiator is not a witness program
@@ -1229,11 +1677,16 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Prevout from initiator is not a witness program".into(),
 			inputs_a: vec![(non_segwit_input, non_segwit_output_tx)],
 			outputs_a: vec![],
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 
 		// Invalid input sequence from initiator.
@@ -1243,11 +1696,16 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Invalid input sequence from initiator".into(),
 			inputs_a: vec![(invalid_sequence_input, tx.clone())],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::IncorrectInputSequenceValue, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Duplicate prevout from initiator.
 		let duplicate_input = TxIn {
@@ -1256,11 +1714,16 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Duplicate prevout from initiator".into(),
 			inputs_a: vec![(duplicate_input.clone(), tx.clone()), (duplicate_input, tx.clone())],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
 			outputs_b: vec![],
-			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeA)),
+			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeB)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Non-initiator uses same prevout as initiator.
 		let duplicate_input = TxIn {
@@ -1269,88 +1732,134 @@ mod tests {
 			..Default::default()
 		};
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Non-initiator uses same prevout as initiator".into(),
 			inputs_a: vec![(duplicate_input.clone(), tx.clone())],
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![(duplicate_input.clone(), tx.clone())],
 			outputs_b: vec![],
-			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeB)),
+			expect_error: Some((AbortReason::PrevTxOutInvalid, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 95_000,
+			a_funding_satoshis: 0,
 		});
 		// Initiator sends too many TxAddInputs
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends too many TxAddInputs".into(),
 			inputs_a: generate_fixed_number_of_inputs(MAX_RECEIVED_TX_ADD_INPUT_COUNT + 1),
 			outputs_a: vec![],
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::ReceivedTooManyTxAddInputs, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Attempt to queue up two inputs with duplicate serial ids. We use a deliberately bad
 		// entropy source, `DuplicateEntropySource` to simulate this.
 		do_test_interactive_tx_constructor_with_entropy_source(
 			TestSession {
+				description: "Attempt to queue up two inputs with duplicate serial ids".into(),
 				inputs_a: generate_fixed_number_of_inputs(2),
 				outputs_a: vec![],
 				inputs_b: vec![],
 				outputs_b: vec![],
 				expect_error: Some((AbortReason::DuplicateSerialId, ErrorCulprit::NodeA)),
+				shared_funding_input: None,
+				new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+				b_funding_satoshis: 0,
+				a_funding_satoshis: 0,
 			},
 			&DuplicateEntropySource,
 		);
 		// Initiator sends too many TxAddOutputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends too many TxAddOutputs".into(),
 			inputs_a: vec![],
 			outputs_a: generate_fixed_number_of_outputs(MAX_RECEIVED_TX_ADD_OUTPUT_COUNT + 1),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::ReceivedTooManyTxAddOutputs, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Initiator sends an output below dust value.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends an output below dust value".into(),
 			inputs_a: vec![],
 			outputs_a: generate_outputs(&[1]),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::BelowDustLimit, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Initiator sends an output above maximum sats allowed.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends an output above maximum sats allowed".into(),
 			inputs_a: vec![],
 			outputs_a: generate_outputs(&[TOTAL_BITCOIN_SUPPLY_SATOSHIS + 1]),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::ExceededMaximumSatsAllowed, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Initiator sends an output without a witness program.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Initiator sends an output without a witness program".into(),
 			inputs_a: vec![],
 			outputs_a: vec![generate_non_witness_output(1_000_000)],
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::InvalidOutputScript, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Attempt to queue up two outputs with duplicate serial ids. We use a deliberately bad
 		// entropy source, `DuplicateEntropySource` to simulate this.
 		do_test_interactive_tx_constructor_with_entropy_source(
 			TestSession {
+				description: "Attempt to queue up two outputs with duplicate serial ids".into(),
 				inputs_a: vec![],
 				outputs_a: generate_fixed_number_of_outputs(2),
 				inputs_b: vec![],
 				outputs_b: vec![],
 				expect_error: Some((AbortReason::DuplicateSerialId, ErrorCulprit::NodeA)),
+				shared_funding_input: None,
+				new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+				b_funding_satoshis: 0,
+				a_funding_satoshis: 0,
 			},
 			&DuplicateEntropySource,
 		);
 
 		// Peer contributed more output value than inputs
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Peer contributed more output value than inputs".into(),
 			inputs_a: generate_inputs(&[100_000]),
 			outputs_a: generate_outputs(&[1_000_000]),
 			inputs_b: vec![],
 			outputs_b: vec![],
 			expect_error: Some((AbortReason::OutputsValueExceedsInputsValue, ErrorCulprit::NodeA)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 
 		// Peer contributed more than allowed number of inputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Peer contributed more than allowed number of inputs".into(),
 			inputs_a: generate_fixed_number_of_inputs(MAX_INPUTS_OUTPUTS_COUNT as u16 + 1),
 			outputs_a: vec![],
 			inputs_b: vec![],
@@ -1359,9 +1868,14 @@ mod tests {
 				AbortReason::ExceededNumberOfInputsOrOutputs,
 				ErrorCulprit::Indeterminate,
 			)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
 		});
 		// Peer contributed more than allowed number of outputs.
 		do_test_interactive_tx_constructor(TestSession {
+			description: "Peer contributed more than allowed number of outputs".into(),
 			inputs_a: generate_inputs(&[TOTAL_BITCOIN_SUPPLY_SATOSHIS]),
 			outputs_a: generate_fixed_number_of_outputs(MAX_INPUTS_OUTPUTS_COUNT as u16 + 1),
 			inputs_b: vec![],
@@ -1370,6 +1884,42 @@ mod tests {
 				AbortReason::ExceededNumberOfInputsOrOutputs,
 				ErrorCulprit::Indeterminate,
 			)),
+			shared_funding_input: None,
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: 0,
+		});
+
+		// During a splice-out, with peer providing more output value than input value
+		// but still pays enough fees due to their to_remote_value_satoshis portion in
+		// the shared input.
+		do_test_interactive_tx_constructor(TestSession {
+			description: "Splice out with sufficient initiator balance".into(),
+			inputs_a: generate_inputs(&[100_000]),
+			outputs_a: generate_outputs(&[120_000]),
+			inputs_b: vec![],
+			outputs_b: vec![],
+			expect_error: None,
+			shared_funding_input: Some(generate_shared_input(100_000, 50_000, 50_000)),
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: -20_000,
+		});
+
+		// During a splice-out, with peer providing more output value than input value
+		// and the to_remote_value_satoshis portion in
+		// the shared input cannot cover fees
+		do_test_interactive_tx_constructor(TestSession {
+			description: "Splice out with insufficient initiator balance".into(),
+			inputs_a: generate_inputs(&[100_000]),
+			outputs_a: generate_outputs(&[120_000]),
+			inputs_b: vec![],
+			outputs_b: vec![],
+			expect_error: Some((AbortReason::OutputsValueExceedsInputsValue, ErrorCulprit::NodeA)),
+			shared_funding_input: Some(generate_shared_input(100_000, 15_000, 85_000)),
+			new_funding_output: TxOut { value: 0, script_pubkey: Default::default() },
+			b_funding_satoshis: 0,
+			a_funding_satoshis: -10_000,
 		});
 	}
 

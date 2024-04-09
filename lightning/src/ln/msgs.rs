@@ -481,6 +481,8 @@ pub struct TxAddInput {
 	pub prevtx_out: u32,
 	/// The sequence number of this input
 	pub sequence: u32,
+	/// The previous funding txid if this is a message from the initiator during splicing
+	pub shared_input_txid: Option<Txid>,
 }
 
 /// A tx_add_output message for adding an output during interactive transaction construction.
@@ -2088,7 +2090,9 @@ impl_writeable_msg!(TxAddInput, {
 	prevtx,
 	prevtx_out,
 	sequence,
-}, {});
+}, {
+	(0, shared_input_txid, option),
+});
 
 impl_writeable_msg!(TxAddOutput, {
 	channel_id,
@@ -3899,6 +3903,7 @@ mod tests {
 			}).unwrap(),
 			prevtx_out: 305419896,
 			sequence: 305419896,
+			shared_input_txid: None,
 		};
 		let encoded_value = tx_add_input.encode();
 		let target_value = <Vec<u8>>::from_hex("0202020202020202020202020202020202020202020202020202020202020202000000012345678900de02000000000101779ced6c148293f86b60cb222108553d22c89207326bb7b6b897e23e64ab5b300200000000fdffffff0236dbc1000000000016001417d29e4dd454bac3b1cde50d1926da80cfc5287b9cbd03000000000016001436ec78d514df462da95e6a00c24daa8915362d420247304402206af85b7dd67450ad12c979302fac49dfacbc6a8620f49c5da2b5721cf9565ca502207002b32fed9ce1bf095f57aeb10c36928ac60b12e723d97d2964a54640ceefa701210301ab7dc16488303549bfcdd80f6ae5ee4c20bf97ab5410bbd6b1bfa85dcd6944000000001234567812345678").unwrap();
