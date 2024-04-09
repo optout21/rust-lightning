@@ -14,10 +14,8 @@ use core::ops::Deref;
 use bitcoin::blockdata::constants::WITNESS_SCALE_FACTOR;
 use bitcoin::consensus::Encodable;
 use bitcoin::policy::MAX_STANDARD_TX_WEIGHT;
-use bitcoin::ScriptBuf;
-use bitcoin::{
-	absolute::LockTime as AbsoluteLockTime, OutPoint, Sequence, Transaction, TxIn, TxOut,
-};
+use bitcoin::absolute::LockTime as AbsoluteLockTime;
+use bitcoin::{OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut};
 
 use crate::chain::chaininterface::fee_for_weight;
 use crate::events::bump_transaction::{BASE_INPUT_WEIGHT, EMPTY_SCRIPT_SIG_WEIGHT};
@@ -81,6 +79,8 @@ pub struct TxInputWithPrevOutput {
 	prev_output: TxOut,
 }
 
+/// Represents a shared input, composed of funds belonging to both sides.
+/// In a splicing transaction, the previous funding transaction is such a shared input.
 #[derive(Debug, Clone)]
 pub struct SharedFundingInput {
 	txin: TxIn,
@@ -105,6 +105,7 @@ struct NegotiationContext {
 	///
 	/// NOTE: Can be negative in the case of a splice-out.
 	remote_contribution_satoshis: i64,
+	/// The output intended to be the new funding output.
 	new_funding_output: TxOut,
 	/// The inputs to be contributed by the holder.
 	inputs: HashMap<SerialId, InteractiveTxInput>,
@@ -113,6 +114,7 @@ struct NegotiationContext {
 	outputs: HashMap<SerialId, InteractiveTxOutput>,
 	/// The locktime of the funding transaction.
 	tx_locktime: AbsoluteLockTime,
+	/// The fee rate used for the transaction
 	feerate_sat_per_kw: u32,
 }
 
@@ -540,7 +542,7 @@ impl NegotiationContext {
 		let mut counterparty_weight_contributed: u64 = self
 			.counterparty_outputs_contributed()
 			.map(|output| {
-				(8 /* value */ + output.script_pubkey().consensus_encode(&mut sink()).unwrap() as u64)
+				(8 /* value */ + output.txout().script_pubkey.consensus_encode(&mut sink()).unwrap() as u64)
 					* WITNESS_SCALE_FACTOR as u64
 			})
 			.sum();
@@ -958,22 +960,6 @@ impl InteractiveTxOutput {
 		}
 	}
 
-	pub fn value(&self) -> u64 {
-		match self {
-			InteractiveTxOutput::Local(output) => output.txout.value,
-			InteractiveTxOutput::Remote(output) => output.txout.value,
-			InteractiveTxOutput::Shared(output) => output.txout.value,
-		}
-	}
-
-	pub fn script_pubkey(&self) -> &ScriptBuf {
-		match self {
-			InteractiveTxOutput::Local(output) => &output.txout.script_pubkey,
-			InteractiveTxOutput::Remote(output) => &output.txout.script_pubkey,
-			InteractiveTxOutput::Shared(output) => &output.txout.script_pubkey,
-		}
-	}
-
 	pub fn txout(&self) -> &TxOut {
 		match self {
 			InteractiveTxOutput::Local(output) => &output.txout,
@@ -981,6 +967,10 @@ impl InteractiveTxOutput {
 			InteractiveTxOutput::Shared(output) => &output.txout,
 		}
 	}
+
+	pub fn value(&self) -> u64 { self.txout().value }
+
+	pub fn script_pubkey(&self) -> &ScriptBuf { &self.txout().script_pubkey }
 }
 
 #[derive(Debug)]
