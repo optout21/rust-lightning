@@ -222,6 +222,7 @@ impl RevocationKey {
 		secp_ctx: &Secp256k1<T>, countersignatory_basepoint: &RevocationBasepoint,
 		per_commitment_point: &PublicKey,
 	) -> Self {
+		// println!("QQQ RevocationKey::from_basepoint csbp {} pcp {}", countersignatory_basepoint.0, per_commitment_point); // TODO remove
 		let rev_append_commit_hash_key = {
 			let mut sha = Sha256::engine();
 			sha.input(&countersignatory_basepoint.to_public_key().serialize());
@@ -243,6 +244,7 @@ impl RevocationKey {
 			.expect("Multiplying a valid public key by a hash is expected to never fail per secp256k1 docs");
 		let pk = countersignatory_contrib.combine(&broadcaster_contrib)
 			.expect("Addition only fails if the tweak is the inverse of the key. This is not possible when the tweak commits to the key.");
+		println!("QQQ RevocationKey::from_basepoint csbp {} pcp {} rbp {}", countersignatory_basepoint.0, per_commitment_point, pk); // TODO remove
 		Self(pk)
 	}
 

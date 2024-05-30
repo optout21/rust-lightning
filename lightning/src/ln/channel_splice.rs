@@ -28,6 +28,8 @@ pub(crate) struct PendingSpliceInfoPre {
 	pub locktime: u32,
 	/// The funding inputs we will be contributing to the splice.
 	pub our_funding_inputs: Vec<(TxIn, TransactionU16LenLimited)>,
+	/// The post-splice channel_keys_id
+	pub post_channel_keys_id: [u8; 32],
 }
 
 /// Info about a pending splice, used in the post-splice channel
@@ -51,6 +53,7 @@ impl PendingSpliceInfoPre {
 	pub(crate) fn new(relative_satoshis: i64, pre_channel_value: u64,
 		post_channel_id: Option<ChannelId>, funding_feerate_perkw: u32, locktime: u32,
 		our_funding_inputs: Vec<(TxIn, TransactionU16LenLimited)>,
+		post_channel_keys_id: [u8; 32],
 	) -> Self {
 		let post_channel_value = Self::add_checked(pre_channel_value, relative_satoshis);
 		Self {
@@ -59,6 +62,7 @@ impl PendingSpliceInfoPre {
 			funding_feerate_perkw,
 			locktime,
 			our_funding_inputs,
+			post_channel_keys_id,
 		}
 	}
 

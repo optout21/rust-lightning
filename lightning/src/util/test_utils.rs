@@ -1267,6 +1267,7 @@ impl SignerProvider for TestKeysInterface {
 	}
 
 	fn derive_channel_signer(&self, channel_value_satoshis: u64, channel_keys_id: [u8; 32]) -> TestChannelSigner {
+		println!("QQQ derive_channel_signer {} {:?}", channel_value_satoshis, channel_keys_id); // TODO remove
 		let keys = self.backing.derive_channel_signer(channel_value_satoshis, channel_keys_id);
 		let state = self.make_enforcement_state_cell(keys.commitment_seed);
 		let signer = TestChannelSigner::new_with_revoked(keys, state, self.disable_revocation_policy_check);

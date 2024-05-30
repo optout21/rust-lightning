@@ -17,6 +17,7 @@ use bitcoin::blockdata::locktime::absolute::LockTime;
 use bitcoin::blockdata::opcodes;
 use bitcoin::blockdata::script::{Builder, Script, ScriptBuf};
 use bitcoin::blockdata::transaction::{Transaction, TxIn, TxOut};
+use bitcoin::consensus::encode;
 use bitcoin::ecdsa::Signature as EcdsaSignature;
 use bitcoin::network::constants::Network;
 use bitcoin::psbt::PartiallySignedTransaction;
@@ -1353,7 +1354,9 @@ impl ChannelSigner for InMemorySigner {
 		let commitment_secret =
 			SecretKey::from_slice(&chan_utils::build_commitment_secret(&self.commitment_seed, idx))
 				.unwrap();
-		PublicKey::from_secret_key(secp_ctx, &commitment_secret)
+		let res = PublicKey::from_secret_key(secp_ctx, &commitment_secret);
+		println!("QQQ get_per_commitment_point {} {} {:?}", idx, res, self.commitment_seed); // TODO remove
+		res
 	}
 
 	fn release_commitment_secret(&self, idx: u64) -> [u8; 32] {
@@ -1965,6 +1968,8 @@ impl KeysManager {
 	pub fn derive_channel_keys(
 		&self, channel_value_satoshis: u64, params: &[u8; 32],
 	) -> InMemorySigner {
+		println!("QQQ DERIVE derive_channel_keys  val {}  seed {}  params {}",
+			channel_value_satoshis, encode::serialize_hex(&self.seed), encode::serialize_hex(params));
 		let chan_id = u64::from_be_bytes(params[0..8].try_into().unwrap());
 		let mut unique_start = Sha256::engine();
 		unique_start.input(params);
@@ -2008,7 +2013,7 @@ impl KeysManager {
 		let htlc_base_key = key_step!(b"HTLC base key", delayed_payment_base_key);
 		let prng_seed = self.get_secure_random_bytes();
 
-		InMemorySigner::new(
+		let res = InMemorySigner::new(
 			&self.secp_ctx,
 			funding_key,
 			revocation_base_key,
@@ -2019,7 +2024,9 @@ impl KeysManager {
 			channel_value_satoshis,
 			params.clone(),
 			prng_seed,
-		)
+		);
+		println!("QQQ DERIVE {:?} {:?}", res.holder_channel_pubkeys.funding_pubkey, res);
+		res
 	}
 
 	/// Signs the given [`PartiallySignedTransaction`] which spends the given [`SpendableOutputDescriptor`]s.
@@ -2281,6 +2288,7 @@ impl SignerProvider for KeysManager {
 	fn derive_channel_signer(
 		&self, channel_value_satoshis: u64, channel_keys_id: [u8; 32],
 	) -> Self::EcdsaSigner {
+		println!("QQQ DERIVE derive_channel_signer");
 		self.derive_channel_keys(channel_value_satoshis, &channel_keys_id)
 	}
 

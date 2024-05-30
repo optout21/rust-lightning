@@ -16,6 +16,7 @@ use bitcoin::blockdata::transaction::{TxIn,TxOut,OutPoint,Transaction};
 use bitcoin::sighash;
 use bitcoin::sighash::EcdsaSighashType;
 use bitcoin::address::Payload;
+use bitcoin::consensus::encode;
 
 use bitcoin::hashes::{Hash, HashEngine};
 use bitcoin::hashes::sha256::Hash as Sha256;
@@ -1120,6 +1121,14 @@ impl_writeable_tlv_based!(BuiltCommitmentTransaction, {
 	(2, txid, required),
 });
 
+fn print_sig(pubkey: &PublicKey, msg: Vec<u8>, sig: &Signature, tx: &Transaction) {
+	println!("SIGNED  pubkey {:?}", pubkey);
+	println!("SIGNED    msg  {:?}", encode::serialize_hex(&msg));  // .as_hex()); 
+	println!("SIGNED    sig  {:?}", sig);
+	println!("SIGNED    tx   {:?}", encode::serialize_hex(&tx.encode()));
+	println!("SIGNED    tx   {:?}", &tx);
+}
+
 impl BuiltCommitmentTransaction {
 	/// Get the SIGHASH_ALL sighash value of the transaction.
 	///
@@ -1132,7 +1141,10 @@ impl BuiltCommitmentTransaction {
 	/// Signs the counterparty's commitment transaction.
 	pub fn sign_counterparty_commitment<T: secp256k1::Signing>(&self, funding_key: &SecretKey, funding_redeemscript: &Script, channel_value_satoshis: u64, secp_ctx: &Secp256k1<T>) -> Signature {
 		let sighash = self.get_sighash_all(funding_redeemscript, channel_value_satoshis);
-		sign(secp_ctx, &sighash, funding_key)
+		let res = sign(secp_ctx, &sighash, funding_key);
+		let pubkey = funding_key.public_key(&secp_ctx);
+		print_sig(&pubkey, sighash.as_ref().to_vec(), &res, &self.transaction);
+		res
 	}
 
 	/// Signs the holder commitment transaction because we are about to broadcast it.
@@ -1378,6 +1390,8 @@ impl CommitmentTransaction {
 
 		let (obscured_commitment_transaction_number, txins) = Self::internal_build_inputs(commitment_number, channel_parameters);
 		let transaction = Self::make_transaction(obscured_commitment_transaction_number, txins, outputs);
+		println!("QQQ new_with_auxiliary_htlc_data keys.r {:?}", keys.revocation_key); // TODO remove
+		println!("QQQ new_with_auxiliary_htlc_data tx {} {:?}", transaction.txid(), transaction); // TODO remove
 		let txid = transaction.txid();
 		CommitmentTransaction {
 			commitment_number,
@@ -1410,6 +1424,7 @@ impl CommitmentTransaction {
 		let (outputs, _) = Self::internal_build_outputs(keys, self.to_broadcaster_value_sat, self.to_countersignatory_value_sat, &mut htlcs_with_aux, channel_parameters, broadcaster_funding_key, countersignatory_funding_key)?;
 
 		let transaction = Self::make_transaction(obscured_commitment_transaction_number, txins, outputs);
+		println!("QQQ internal_rebuild_transaction tx {:?}", transaction); // TODO remove
 		let txid = transaction.txid();
 		let built_transaction = BuiltCommitmentTransaction {
 			transaction,
@@ -1435,6 +1450,13 @@ impl CommitmentTransaction {
 		let countersignatory_pubkeys = channel_parameters.countersignatory_pubkeys();
 		let contest_delay = channel_parameters.contest_delay();
 
+		println!("QQQ internal_build_outputs  {} {}  anchor {}  cppk {}  revk {}",
+			to_broadcaster_value_sat, to_countersignatory_value_sat,
+			channel_parameters.channel_type_features().supports_anchors_zero_fee_htlc_tx(),
+			countersignatory_pubkeys.payment_point,
+			&keys.revocation_key.0,
+		); // TODO remove
+
 		let mut txouts: Vec<(TxOut, Option<&mut HTLCOutputInCommitment>)> = Vec::new();
 
 		if to_countersignatory_value_sat > 0 {
@@ -1443,6 +1465,7 @@ impl CommitmentTransaction {
 			} else {
 			    Payload::p2wpkh(&BitcoinPublicKey::new(countersignatory_pubkeys.payment_point)).unwrap().script_pubkey()
 			};
+			println!("QQQ internal_build_outputs  cp script {:?}", script); // TODO remove
 			txouts.push((
 				TxOut {
 					script_pubkey: script.clone(),
@@ -1458,6 +1481,7 @@ impl CommitmentTransaction {
 				contest_delay,
 				&keys.broadcaster_delayed_payment_key,
 			);
+			println!("QQQ internal_build_outputs  ho script {:?} {:?}", redeem_script.to_v0_p2wsh(), redeem_script); // TODO remove
 			txouts.push((
 				TxOut {
 					script_pubkey: redeem_script.to_v0_p2wsh(),
@@ -1807,12 +1831,18 @@ pub fn get_commitment_transaction_number_obscure_factor(
 	}
 	let res = Sha256::from_engine(sha).to_byte_array();
 
-	((res[26] as u64) << 5 * 8)
+	let fres = ((res[26] as u64) << 5 * 8)
 		| ((res[27] as u64) << 4 * 8)
 		| ((res[28] as u64) << 3 * 8)
 		| ((res[29] as u64) << 2 * 8)
 		| ((res[30] as u64) << 1 * 8)
-		| ((res[31] as u64) << 0 * 8)
+		| ((res[31] as u64) << 0 * 8);
+
+		println!("QQQ get_commitment_transaction_number_obscure_factor {} {} {} {}",
+			broadcaster_payment_basepoint, countersignatory_payment_basepoint, outbound_from_broadcaster, fres,
+		); // TODO remove
+
+		fres
 }
 
 #[cfg(test)]
@@ -1883,6 +1913,7 @@ mod tests {
 		}
 
 		fn build(&mut self, to_broadcaster_sats: u64, to_countersignatory_sats: u64) -> CommitmentTransaction {
+			println!("QQQ TestCommitmentTxBuilder new"); // TODO remove
 			CommitmentTransaction::new_with_auxiliary_htlc_data(
 				self.commitment_number, to_broadcaster_sats, to_countersignatory_sats,
 				self.holder_funding_pubkey.clone(),

@@ -51,8 +51,8 @@ use crate::ln::channel::{Channel, ChannelPhase, ChannelContext, ChannelError, Ch
 pub use crate::ln::channel::{InboundHTLCDetails, InboundHTLCStateDetails, OutboundHTLCDetails, OutboundHTLCStateDetails};
 #[cfg(any(dual_funding, splicing))]
 use crate::ln::channel::{InboundV2Channel, OutboundV2Channel, InteractivelyFunded as _};
-#[cfg(splicing)]
-use crate::ln::channel::DualFundingChannelContext;
+// #[cfg(splicing)]
+// use crate::ln::channel::DualFundingChannelContext;
 #[cfg(splicing)]
 use crate::ln::channel_splice::PendingSpliceInfoPre;
 use crate::ln::features::{Bolt12InvoiceFeatures, ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
@@ -3530,7 +3530,12 @@ where
 						return Err(APIError::ChannelUnavailable { err: format!("Channel has already a splice pending, channel id {}", channel_id) });
 					}
 
-					chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(relative_satoshis, pre_channel_value, None, funding_feerate_perkw, locktime, funding_inputs));
+					// Generate new channel_keys_id, to be committed to later
+					// let post_channel_keys_id = self.signer_provider.generate_channel_keys_id(false, post_channel_value, chan.context.get_user_id());
+					// TODO do not generate new
+					let post_channel_keys_id = chan.context.channel_keys_id;
+					chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(relative_satoshis, pre_channel_value, None,
+						funding_feerate_perkw, locktime, funding_inputs, post_channel_keys_id));
 
 					// Check channel id
 					let post_splice_v2_channel_id = chan.context.generate_v2_channel_id_from_revocation_basepoints();
@@ -3539,7 +3544,11 @@ where
 							chan.context.channel_id(), post_splice_v2_channel_id) });
 					}
 
-					let msg = chan.get_splice(self.chain_hash.clone(), relative_satoshis, funding_feerate_perkw, locktime);
+					let msg = chan.get_splice(self.chain_hash.clone(), relative_satoshis, &self.signer_provider, post_channel_keys_id, funding_feerate_perkw, locktime);
+
+					let logger = WithContext::from(&self.logger, Some(*their_network_key), Some(*	channel_id));
+					log_debug!(logger, "Sending out `splice` message, relative satoshis: {}  new funding pubkey: {}",
+						msg.relative_satoshis, msg.funding_pubkey);
 
 					peer_state.pending_msg_events.push(events::MessageSendEvent::SendSplice {
 						node_id: *their_network_key,
@@ -8759,6 +8768,7 @@ where
 
 	fn internal_commitment_signed(&self, counterparty_node_id: &PublicKey, msg: &msgs::CommitmentSigned) -> Result<(), MsgHandleErrInternal> {
 		#[cfg(any(dual_funding, splicing))]
+		println!("QQQ internal_commitment_signed  chID {}", msg.channel_id); // TODO remove
 		let best_block = *self.best_block.read().unwrap();
 		let per_peer_state = self.per_peer_state.read().unwrap();
 		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
@@ -8772,6 +8782,7 @@ where
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				match chan_phase_entry.get_mut() {
 					ChannelPhase::Funded(chan) => {
+						// println!("QQQ internal_commitment_signed  chan pk {:?}", chan.context.holder_signer.as_ref().pubkeys().funding_pubkey); // TODO remove
 						let logger = WithChannelContext::from(&self.logger, &chan.context);
 						let funding_txo = chan.context.get_funding_txo();
 
@@ -9247,7 +9258,7 @@ where
 		let peer_state = &mut *peer_state_lock;
 
 		// Look for channel
-		let post_channel_value = match peer_state.channel_by_id.entry(msg.channel_id) {
+		let (post_channel_value, post_channel_keys_id) = match peer_state.channel_by_id.entry(msg.channel_id) {
 			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}, channel_id {}", counterparty_node_id, msg.channel_id), msg.channel_id)),
 			hash_map::Entry::Occupied(chan_entry) => {
 				if let ChannelPhase::Funded(chan) = chan_entry.get() {
@@ -9278,7 +9289,12 @@ where
 							chan.context.channel_id(), post_splice_v2_channel_id), msg.channel_id));
 					}
 
-					post_channel_value
+					// Generate new channel_keys_id
+					// let post_channel_keys_id = self.signer_provider.generate_channel_keys_id(true, post_channel_value, chan.context.get_user_id());
+					// TODO do not generate new
+					let post_channel_keys_id = chan.context.channel_keys_id;
+
+					(post_channel_value, post_channel_keys_id)
 				} else {
 					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel in wrong state".to_owned(), msg.channel_id.clone()));
 				}
@@ -9298,17 +9314,35 @@ where
 			}
 		};
 
-		let post_chan = InboundV2Channel {
-			context: prev_chan.context,
-			unfunded_context: UnfundedChannelContext::default(),
-			dual_funding_context: DualFundingChannelContext {
-				our_funding_satoshis: 0,
-				their_funding_satoshis: post_channel_value, // msg.relative_satoshis as u64,
-				funding_tx_locktime: LockTime::from_consensus(msg.locktime),
-				funding_feerate_sat_per_1000_weight: msg.funding_feerate_perkw,
-				our_funding_inputs: vec![],
-			},
-		};
+		// let post_chan = InboundV2Channel {
+		// 	context: prev_chan.context,
+		// 	unfunded_context: UnfundedChannelContext::default(),
+		// 	dual_funding_context: DualFundingChannelContext {
+		// 		our_funding_satoshis: 0,
+		// 		their_funding_satoshis: post_channel_value, // msg.relative_satoshis as u64,
+		// 		funding_tx_locktime: LockTime::from_consensus(msg.locktime),
+		// 		funding_feerate_sat_per_1000_weight: msg.funding_feerate_perkw,
+		// 		our_funding_inputs: vec![],
+		// 	},
+		// };
+		let post_chan = InboundV2Channel::new_spliced(
+			&prev_chan.context,
+			// &self.fee_estimator, &self.entropy_source,
+			&self.signer_provider,
+			&msg.funding_pubkey,
+			// &peer_state.latest_features,
+			msg.relative_satoshis,
+			1000 * post_channel_value,
+			Vec::new(),
+			post_channel_keys_id,
+			// &self.default_configuration,
+			// self.best_block.read().unwrap().height,
+			// outbound_scid_alias,
+			// _funding_conf_target.unwrap_or(ConfirmationTarget::NonAnchorChannelFee)),
+			LockTime::from_consensus(msg.locktime), msg.funding_feerate_perkw)
+			.unwrap(); // TODO error
+
+		println!("QQQ channel IDs  old {}  new {}", prev_chan.context.channel_id(), post_chan.context.channel_id()); // TODO remove
 
 		// Add the modified channel
 		let post_chan_id = post_chan.context.channel_id();
@@ -9321,10 +9355,11 @@ where
 				if let ChannelPhase::UnfundedInboundV2(post_chan) = chan_entry.get_mut() {
 					let pre_channel_value = post_chan.context.get_value_satoshis();
 
-					post_chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(msg.relative_satoshis, pre_channel_value, Some(post_chan_id), msg.funding_feerate_perkw, msg.locktime, Vec::new()));
+					post_chan.context.pending_splice_pre = Some(PendingSpliceInfoPre::new(msg.relative_satoshis, pre_channel_value, Some(post_chan_id),
+						msg.funding_feerate_perkw, msg.locktime, Vec::new(), post_channel_keys_id));
 
 					// Apply start of splice changed in the state (update state, capacity funding tx, ...)
-					post_chan.context.splice_start(false, msg.relative_satoshis, &self.logger)
+					post_chan.context.splice_start2(false, msg.relative_satoshis, &self.logger)
 						.map_err(|ce| MsgHandleErrInternal::send_err_msg_no_close(ce.to_string(), msg.channel_id.clone()))?;
 
 					let new_msg = post_chan.get_splice_ack(self.chain_hash.clone()).unwrap(); // TODO error
@@ -9355,6 +9390,7 @@ where
 	// Logic for incoming splicing_ack message
 	#[cfg(splicing)]
 	fn internal_splice_ack(&self, counterparty_node_id: &PublicKey, msg: &msgs::SpliceAck) -> Result<(), MsgHandleErrInternal> {
+		println!("QQQ internal_splice_ack  msg.funding_pubkey {}", msg.funding_pubkey); // TODO remove
 		if msg.chain_hash != self.chain_hash {
 			return Err(MsgHandleErrInternal::send_err_msg_no_close("Unknown genesis block hash".to_owned(), msg.channel_id.clone()));
 		}
@@ -9408,17 +9444,35 @@ where
 			}
 		};
 
-		let post_chan = OutboundV2Channel {
-			context: prev_chan.context,
-			unfunded_context: UnfundedChannelContext::default(),
-			dual_funding_context: DualFundingChannelContext {
-				our_funding_satoshis: pending_splice.post_channel_value, // msg.relative_satoshis as u64,
-				their_funding_satoshis: 0,
-				funding_tx_locktime: LockTime::from_consensus(pending_splice.locktime),
-				funding_feerate_sat_per_1000_weight: pending_splice.funding_feerate_perkw,
-				our_funding_inputs: pending_splice.our_funding_inputs,
-			},
-		};
+		// let post_chan = OutboundV2Channel {
+		// 	context: prev_chan.context,
+		// 	unfunded_context: UnfundedChannelContext::default(),
+		// 	dual_funding_context: DualFundingChannelContext {
+		// 		our_funding_satoshis: pending_splice.post_channel_value, // msg.relative_satoshis as u64,
+		// 		their_funding_satoshis: 0,
+		// 		funding_tx_locktime: LockTime::from_consensus(pending_splice.locktime),
+		// 		funding_feerate_sat_per_1000_weight: pending_splice.funding_feerate_perkw,
+		// 		our_funding_inputs: pending_splice.our_funding_inputs,
+		// 	},
+		// };
+		let post_chan = OutboundV2Channel::new_spliced(
+			&prev_chan.context,
+			// &self.fee_estimator, &self.entropy_source,
+			&self.signer_provider,
+			&msg.funding_pubkey,
+			// &peer_state.latest_features,
+			msg.relative_satoshis,
+			0,
+			pending_splice.our_funding_inputs,
+			pending_splice.post_channel_keys_id,
+			// &self.default_configuration,
+			// self.best_block.read().unwrap().height,
+			// outbound_scid_alias,
+			// _funding_conf_target.unwrap_or(ConfirmationTarget::NonAnchorChannelFee)),
+			LockTime::from_consensus(pending_splice.locktime), pending_splice.funding_feerate_perkw)
+			.unwrap(); // TODO error
+
+		println!("QQQ channel IDs  old {}  new {}", prev_chan.context.channel_id(), post_chan.context.channel_id()); // TODO remove
 
 		// Add the modified channel
 		let post_chan_id = post_chan.context.channel_id();
@@ -9436,7 +9490,7 @@ where
 					post_chan.context.pending_splice_pre.as_mut().unwrap().post_channel_id = Some(post_chan_id);
 
 					// Apply start of splice changed in the state (update state, capacity funding tx, ...)
-					post_chan.context.splice_start(true, msg.relative_satoshis, &self.logger)
+					post_chan.context.splice_start2(true, msg.relative_satoshis, &self.logger)
 						.map_err(|ce| MsgHandleErrInternal::send_err_msg_no_close(ce.to_string(), post_chan_id))?;
 
 					/* Note: SpliceAckedInputsContributionReady event is no longer used
