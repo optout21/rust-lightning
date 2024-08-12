@@ -121,7 +121,7 @@ impl fmt::Display for ChannelId {
 	}
 }
 
-pub use lightning_types::{PaymentHash, PaymentPreimage, PaymentSecret};
+pub use lightning_types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 
 #[cfg(test)]
 mod tests {
