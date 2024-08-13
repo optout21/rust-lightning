@@ -464,27 +464,33 @@ impl From<Currency> for Network {
 	}
 }
 
-/// Wrapped Fe32 with Ord trait
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct Fe32Ord(pub Fe32);
-
-impl Ord for Fe32Ord {
-	fn cmp(&self, other: &Self) -> Ordering { self.0.to_u8().cmp(&other.0.to_u8()) }
-}
-
-impl PartialOrd for Fe32Ord {
-	fn partial_cmp(&self, other: &Self) -> Option<Ordering> { self.0.to_u8().partial_cmp(&other.0.to_u8()) }
-}
-
 /// Tagged field which may have an unknown tag
 ///
 /// This is not exported to bindings users as we don't currently support TaggedField
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum RawTaggedField {
 	/// Parsed tagged field with known tag
 	KnownSemantics(TaggedField),
 	/// tagged field which was not parsed due to an unknown tag or undefined field semantics
-	UnknownSemantics(Vec<Fe32Ord>),
+	UnknownSemantics(Vec<Fe32>),
+}
+
+impl PartialOrd for RawTaggedField {
+	fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+/// Note: `Ord `cannot be simply derived because of `Fe32`.
+impl Ord for RawTaggedField {
+	fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+		match (self, other) {
+			(RawTaggedField::KnownSemantics(ref a), RawTaggedField::KnownSemantics(ref b)) => a.cmp(b),
+			(RawTaggedField::UnknownSemantics(ref a), RawTaggedField::UnknownSemantics(ref b)) => a.iter().map(|a| a.to_u8()).cmp(b.iter().map(|b| b.to_u8())),
+			(RawTaggedField::KnownSemantics(..), RawTaggedField::UnknownSemantics(..)) => core::cmp::Ordering::Less,
+			(RawTaggedField::UnknownSemantics(..), RawTaggedField::KnownSemantics(..)) => core::cmp::Ordering::Greater,
+		}
+	}
 }
 
 /// Tagged field with known tag

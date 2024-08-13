@@ -336,7 +336,7 @@ impl ToBase32 for RawTaggedField {
 	fn write_base32<W: WriteBase32>(&self, writer: &mut W) -> Result<(), <W as WriteBase32>::Err> {
 		match *self {
 			RawTaggedField::UnknownSemantics(ref content) => {
-				writer.write(&content.iter().map(|v| v.0).collect())
+				writer.write(&content)
 			},
 			RawTaggedField::KnownSemantics(ref tagged_field) => {
 				tagged_field.write_base32(writer)

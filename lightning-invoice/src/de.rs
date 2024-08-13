@@ -475,7 +475,7 @@ fn parse_tagged_parts(data: &[Fe32]) -> Result<Vec<RawTaggedField>, Bolt11ParseE
 				parts.push(RawTaggedField::KnownSemantics(field))
 			},
 			Err(Bolt11ParseError::Skip) | Err(Bolt11ParseError::Bech32Error(_)) => {
-				parts.push(RawTaggedField::UnknownSemantics(field.iter().map(|v| crate::Fe32Ord(*v)).collect()))
+				parts.push(RawTaggedField::UnknownSemantics(field.to_vec()))
 			},
 			Err(e) => {return Err(e)}
 		}
