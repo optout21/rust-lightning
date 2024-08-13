@@ -27,7 +27,6 @@ serde = { version = "1.0.118", optional = true }
 bitcoin = { version = "0.31.2", default-features = false }
 
 [dev-dependencies]
-hex = { package = "hex-conservative", version = "0.1.1", default-features = false }
 serde_json = { version = "1"}
 hashbrown = { version = "0.13", default-features = false }
 
