@@ -719,6 +719,11 @@ impl Bolt11InvoiceFeatures {
 		self.to_context_internal()
 	}
 
+	/// Accessor for flags
+	pub fn flags(&self) -> &Vec<u8> {
+		&self.flags
+	}
+
 	/// Getting a route for a keysend payment to a private node requires providing the payee's
 	/// features (since they were not announced in a node announcement). However, keysend payments
 	/// don't have an invoice to pull the payee's features from, so this method is provided for use
