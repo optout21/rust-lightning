@@ -7224,27 +7224,24 @@ where
 							&self.channel_type_features(), &peer_state.latest_features, &open_channel_msg,
 							user_channel_id, &self.default_configuration, best_block_height, &self.logger, accept_0conf
 						)
-						.map(|channel| ChannelPhase::UnfundedInboundV1(channel))
+						.map(|channel| (ChannelPhase::UnfundedInboundV1(channel), None))
 						.map_err(|err| MsgHandleErrInternal::from_chan_no_close(err, *temporary_channel_id))
 					},
 					OpenChannelMessage::V2(open_channel_msg) => {
-						let channel_res = InboundV2Channel::new(&self.fee_estimator, &self.entropy_source, &self.signer_provider,
-							counterparty_node_id.clone(), &self.channel_type_features(), &peer_state.latest_features,
+						InboundV2Channel::new(&self.fee_estimator, &self.entropy_source, &self.signer_provider,
+							*counterparty_node_id, &self.channel_type_features(), &peer_state.latest_features,
 							&open_channel_msg, funding_inputs, user_channel_id, &self.default_configuration, best_block_height,
-							&self.logger);
-						match channel_res {
-							Ok((channel, msg_send_event_opt)) => {
-								if let Some(msg_send_event) = msg_send_event_opt {
-									peer_state.pending_msg_events.push(msg_send_event);
-								}
-								Ok(ChannelPhase::UnfundedInboundV2(channel))
-							},
-							Err(_) => Err(MsgHandleErrInternal::from_chan_no_close(ChannelError::Close(
+							&self.logger
+						)
+						.map(|(channel, msg_send_event_opt)| (ChannelPhase::UnfundedInboundV2(channel), msg_send_event_opt))
+						.map_err(|_| MsgHandleErrInternal::from_chan_no_close(
+							ChannelError::Close(
 								(
 									"V2 channel rejected due to sender error".into(),
 									ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
-								)), *temporary_channel_id)),
-						}
+								)
+							), *temporary_channel_id)
+						)
 					},
 				}
 			},
@@ -7267,7 +7264,7 @@ where
 					},
 				}
 			}
-			Ok(mut channel_phase) => {
+			Ok((mut channel_phase, tx_msg_send_event_opt)) => {
 				if accept_0conf {
 					// This should have been correctly configured by the call to Inbound(V1/V2)Channel::new.
 					debug_assert!(channel_phase.context().minimum_depth().unwrap() == 0);
@@ -7318,6 +7315,9 @@ where
 						peer_state.pending_msg_events.push(events::MessageSendEvent::SendAcceptChannelV2 {
 							node_id: channel.context.get_counterparty_node_id(),
 							msg: channel.accept_inbound_dual_funded_channel() });
+						if let Some(msg_send_event) = tx_msg_send_event_opt {
+							peer_state.pending_msg_events.push(msg_send_event);
+						}
 						peer_state.channel_by_id.insert(channel.context.channel_id(),
 							ChannelPhase::UnfundedInboundV2(channel));
 					},
