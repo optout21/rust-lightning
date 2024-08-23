@@ -1834,6 +1834,7 @@ pub fn find_route<L: Deref, GL: Deref, S: ScoreLookUp>(
 	scorer: &S, score_params: &S::ScoreParams, random_seed_bytes: &[u8; 32]
 ) -> Result<Route, LightningError>
 where L::Target: Logger, GL::Target: Logger {
+	println!("QQQ find_route");
 	let graph_lock = network_graph.read_only();
 	let mut route = get_route(our_node_pubkey, &route_params, &graph_lock, first_hops, logger,
 		scorer, score_params, random_seed_bytes)?;
@@ -2001,6 +2002,7 @@ where L::Target: Logger {
 	// Our search will then attempt to reach them while traversing from the payee node.
 	let mut first_hop_targets: HashMap<_, Vec<&ChannelDetails>> =
 		hash_map_with_capacity(if first_hops.is_some() { first_hops.as_ref().unwrap().len() } else { 0 });
+	println!("QQQ get_route 1 first_hop_targets len {} {} {}", first_hop_targets.len(), first_hops.is_some(), first_hops.as_ref().unwrap().len()); // TODO remove
 	if let Some(hops) = first_hops {
 		for chan in hops {
 			if chan.get_outbound_payment_scid().is_none() {
@@ -2009,11 +2011,13 @@ where L::Target: Logger {
 			if chan.counterparty.node_id == *our_node_pubkey {
 				return Err(LightningError{err: "First hop cannot have our_node_pubkey as a destination.".to_owned(), action: ErrorAction::IgnoreError});
 			}
+			println!("QQQ get_route 2 first_hop_targets len {}", first_hop_targets.len()); // TODO remove
 			first_hop_targets
 				.entry(NodeId::from_pubkey(&chan.counterparty.node_id))
 				.or_insert(Vec::new())
 				.push(chan);
 		}
+		println!("QQQ get_route 3 first_hop_targets len {}", first_hop_targets.len()); // TODO remove
 		if first_hop_targets.is_empty() {
 			return Err(LightningError{err: "Cannot route when there are no outbound routes away from us".to_owned(), action: ErrorAction::IgnoreError});
 		}
@@ -3231,6 +3235,7 @@ fn build_route_from_hops_internal<L: Deref>(
 	our_node_pubkey: &PublicKey, hops: &[PublicKey], route_params: &RouteParameters,
 	network_graph: &ReadOnlyNetworkGraph, logger: L, random_seed_bytes: &[u8; 32],
 ) -> Result<Route, LightningError> where L::Target: Logger {
+	println!("QQQ build_route_from_hops_internal");
 
 	struct HopScorer {
 		our_node_id: NodeId,

@@ -693,6 +693,9 @@ pub fn create_chan_between_nodes_with_value<'a, 'b, 'c: 'd, 'd>(node_a: &'a Node
 /// Gets an RAA and CS which were sent in response to a commitment update
 pub fn get_revoke_commit_msgs<CM: AChannelManager, H: NodeHolder<CM=CM>>(node: &H, recipient: &PublicKey) -> (msgs::RevokeAndACK, msgs::CommitmentSigned) {
 	let events = node.node().get_and_clear_pending_msg_events();
+	if events.len() != 2 {
+		println!("Wrong {}", events.len())
+	}
 	assert_eq!(events.len(), 2);
 	(match events[0] {
 		MessageSendEvent::SendRevokeAndACK { ref node_id, ref msg } => {
@@ -1041,6 +1044,9 @@ pub fn check_added_monitors<CM: AChannelManager, H: NodeHolder<CM=CM>>(node: &H,
 	if let Some(chain_monitor) = node.chain_monitor() {
 		let mut added_monitors = chain_monitor.added_monitors.lock().unwrap();
 		let n = added_monitors.len();
+		if n != count {
+			println!("Wrong");
+		}
 		assert_eq!(n, count, "expected {} monitors to be added, not {}", count, n);
 		added_monitors.clear();
 	}
@@ -2131,6 +2137,7 @@ macro_rules! get_payment_preimage_hash {
 
 /// Gets a route from the given sender to the node described in `payment_params`.
 pub fn get_route(send_node: &Node, route_params: &RouteParameters) -> Result<Route, msgs::LightningError> {
+	println!("QQQ get_route p2");
 	let scorer = TestScorer::new();
 	let keys_manager = TestKeysInterface::new(&[0u8; 32], bitcoin::network::constants::Network::Testnet);
 	let random_seed_bytes = keys_manager.get_secure_random_bytes();
@@ -2842,7 +2849,9 @@ pub fn pass_claimed_payment_along_route<'a, 'b, 'c, 'd>(args: ClaimAlongRouteArg
 		origin_node, expected_paths, expected_extra_fees, expected_min_htlc_overpay, skip_last,
 		payment_preimage: our_payment_preimage, allow_1_msat_fee_overpay,
 	} = args;
+	println!("QQQ pass_claimed_payment_along_route 1"); // TODO remove
 	let claim_event = expected_paths[0].last().unwrap().node.get_and_clear_pending_events();
+	println!("QQQ pass_claimed_payment_along_route 2 {}", claim_event.len()); // TODO remove
 	assert_eq!(claim_event.len(), 1);
 	#[allow(unused)]
 	let mut fwd_amt_msat = 0;
@@ -3034,7 +3043,9 @@ pub fn route_payment<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expected_route:
 	let payment_params = PaymentParameters::from_node_id(expected_route.last().unwrap().node.get_our_node_id(), TEST_FINAL_CLTV)
 		.with_bolt11_features(expected_route.last().unwrap().node.bolt11_invoice_features()).unwrap();
 	let route_params = RouteParameters::from_payment_params_and_value(payment_params, recv_value);
+	println!("QQQ route_payment");
 	let route = get_route(origin_node, &route_params).unwrap();
+	println!("QQQ route_payment route {:?}", route);
 	assert_eq!(route.paths.len(), 1);
 	assert_eq!(route.paths[0].hops.len(), expected_route.len());
 	for (node, hop) in expected_route.iter().zip(route.paths[0].hops.iter()) {

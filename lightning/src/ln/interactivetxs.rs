@@ -302,6 +302,8 @@ pub(crate) struct InteractiveTxSigningSession {
 }
 
 impl InteractiveTxSigningSession {
+	pub fn get_received_commitment_signed(&self) -> Option<&CommitmentSigned> { self.received_commitment_signed.as_ref() }
+
 	pub fn received_commitment_signed(
 		&mut self, commitment_signed: CommitmentSigned,
 	) -> Option<TxSignatures> {

@@ -843,6 +843,7 @@ impl ChannelState {
 				!flags.is_set(ChannelReadyFlags::AWAITING_REMOTE_REVOKE) &&
 					!flags.is_set(FundedStateFlags::MONITOR_UPDATE_IN_PROGRESS.into()) &&
 					!flags.is_set(FundedStateFlags::PEER_DISCONNECTED.into()),
+			ChannelState::AwaitingChannelReady(AwaitingChannelReadyFlags::IS_SPLICE) => true, // TODO
 			_ => {
 				debug_assert!(false, "Can only generate new commitment within ChannelReady");
 				false
@@ -1251,12 +1252,13 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			#[cfg(any(dual_funding, splicing))]
 			ChannelPhase::UnfundedInboundV2(chan) => &chan.context,
 			#[cfg(splicing)]
-			ChannelPhase::RenegotiatingFundingOutbound((_pre_chan, post_chan)) => &post_chan.context,
+			ChannelPhase::RenegotiatingFundingOutbound((pre_chan, _post_chan)) => &pre_chan.context,
 			#[cfg(splicing)]
-			ChannelPhase::RenegotiatingFundingInbound((_pre_chan, post_chan)) => &post_chan.context,
+			ChannelPhase::RenegotiatingFundingInbound((pre_chan, _post_chan)) => &pre_chan.context,
 			// Both post and pre exist
+			// TODO which one to use?
 			#[cfg(splicing)]
-			ChannelPhase::RenegotiatingFundingPending((_pre_chan, post_chan)) => &post_chan.context,
+			ChannelPhase::RenegotiatingFundingPending((pre_chan, _post_chan)) => &pre_chan.context,
 		}
 	}
 
@@ -1270,12 +1272,13 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			#[cfg(any(dual_funding, splicing))]
 			ChannelPhase::UnfundedInboundV2(ref mut chan) => &mut chan.context,
 			#[cfg(splicing)]
-			ChannelPhase::RenegotiatingFundingOutbound((ref mut _pre_chan, post_chan)) => &mut post_chan.context,
+			ChannelPhase::RenegotiatingFundingOutbound((ref mut pre_chan, _post_chan)) => &mut pre_chan.context,
 			#[cfg(splicing)]
-			ChannelPhase::RenegotiatingFundingInbound((ref mut _pre_chan, post_chan)) => &mut post_chan.context,
+			ChannelPhase::RenegotiatingFundingInbound((ref mut pre_chan, _post_chan)) => &mut pre_chan.context,
 			// Both post and pre exist
+			// TODO which one to use?
 			#[cfg(splicing)]
-			ChannelPhase::RenegotiatingFundingPending((ref mut _pre_chan, post_chan)) => &mut post_chan.context,
+			ChannelPhase::RenegotiatingFundingPending((ref mut pre_chan, _post_chan)) => &mut pre_chan.context,
 		}
 	}
 }
@@ -2646,6 +2649,8 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 			!self.channel_state.is_local_shutdown_sent() &&
 			!self.channel_state.is_remote_shutdown_sent() &&
 			!self.monitor_pending_channel_ready
+			// TODO remove this workaround
+			// || self.is_splice_pending()
 	}
 
 	/// shutdown state returns the state of the channel in its various stages of shutdown
@@ -3289,6 +3294,8 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 		} else {
 			value_to_b = 0;
 		}
+
+		println!("QQQ build_commitment_transaction  {} {}", value_to_a, value_to_b); // TODO remove
 
 		let num_nondust_htlcs = included_non_dust_htlcs.len();
 
@@ -5351,10 +5358,12 @@ impl<SP: Deref> Channel<SP> where
 	) -> Result<ChannelMonitor<<SP::Target as SignerProvider>::EcdsaSigner>, ChannelError>
 	where L::Target: Logger
 	{
+		println!("QQQ commitment_signed_initial_v2  {:?}", self.context.channel_state); // TODO remove
 		if !matches!(self.context.channel_state, ChannelState::FundingNegotiated) {
 			return Err(ChannelError::Close("Received initial commitment_signed before funding transaction constructed!".to_owned()));
 		}
 		let is_splice_pending = self.context.is_splice_pending();
+		println!("QQQ commitment_signed_initial_v2 is_splice_pending {}", is_splice_pending); // TODO remove
 		if !is_splice_pending {
 			if self.context.commitment_secrets.get_min_seen_secret() != (1 << 48) ||
 					self.context.cur_counterparty_commitment_transaction_number != INITIAL_COMMITMENT_NUMBER ||
@@ -5451,7 +5460,11 @@ impl<SP: Deref> Channel<SP> where
 	pub fn commitment_signed<L: Deref>(&mut self, msg: &msgs::CommitmentSigned, logger: &L) -> Result<Option<ChannelMonitorUpdate>, ChannelError>
 		where L::Target: Logger
 	{
-		if !matches!(self.context.channel_state, ChannelState::ChannelReady(_)) {
+		println!("QQQ commitment_signed {:?}", self.context.channel_state); // TODO remove
+		// // TODO expand condition -- on post channel
+		if
+			!matches!(self.context.channel_state, ChannelState::ChannelReady(_)) &&
+			!matches!(self.context.channel_state, ChannelState::AwaitingChannelReady(AwaitingChannelReadyFlags::IS_SPLICE)) {
 			return Err(ChannelError::Close("Got commitment signed message when channel was not in an operational state".to_owned()));
 		}
 		if self.context.channel_state.is_peer_disconnected() {
@@ -8265,12 +8278,13 @@ impl<SP: Deref> Channel<SP> where
 	) -> Result<Option<msgs::UpdateAddHTLC>, ChannelError>
 	where F::Target: FeeEstimator, L::Target: Logger
 	{
-		if !matches!(self.context.channel_state, ChannelState::ChannelReady(_)) ||
-			self.context.channel_state.is_local_shutdown_sent() ||
-			self.context.channel_state.is_remote_shutdown_sent()
-		{
-			return Err(ChannelError::Ignore("Cannot send HTLC until channel is fully established and we haven't started shutting down".to_owned()));
-		}
+		// TODO put it back
+		// if !matches!(self.context.channel_state, ChannelState::ChannelReady(_)) ||
+		// 	self.context.channel_state.is_local_shutdown_sent() ||
+		// 	self.context.channel_state.is_remote_shutdown_sent()
+		// {
+		// 	return Err(ChannelError::Ignore("Cannot send HTLC until channel is fully established and we haven't started shutting down".to_owned()));
+		// }
 		let channel_total_msat = self.context.channel_value_satoshis * 1000;
 		if amount_msat > channel_total_msat {
 			return Err(ChannelError::Ignore(format!("Cannot send amount {}, because it is more than the total value of the channel {}", amount_msat, channel_total_msat)));

@@ -3584,6 +3584,18 @@ where
 			for (_cp_id, peer_state_mutex) in per_peer_state.iter() {
 				let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 				let peer_state = &mut *peer_state_lock;
+				println!("QQQ list_funded_channels_with_filter   {}", peer_state.channel_by_id.len());
+				#[cfg(splicing)]
+				for (_cid, cph) in peer_state.channel_by_id.iter() {
+					println!("    {}", match cph {
+						ChannelPhase::Funded(_) => "F".to_string(),
+						ChannelPhase::RenegotiatingFundingInbound(_) => "RNFI".to_string(),
+						ChannelPhase::RenegotiatingFundingOutbound(_) => "RNFO".to_string(),
+						ChannelPhase::RenegotiatingFundingPending((pre, post)) => format!("RNFP \n   {:?} \n   {:?}", pre.context.is_usable(), post.context.is_usable()	),
+						_ => "?".to_string(),
+					});
+				}
+
 				res.extend(peer_state.channel_by_id.iter()
 					.filter_map(|(chan_id, phase)| match phase {
 						// Only `Channels` in the `ChannelPhase::Funded` phase can be considered funded.
@@ -3596,6 +3608,23 @@ where
 							peer_state.latest_features.clone(), &self.fee_estimator)
 					})
 				);
+				// TODO collect 2 branches into one
+				println!("QQQ list_funded_channels_with_filter {}", res.len());
+				#[cfg(splicing)]
+				res.extend(peer_state.channel_by_id.iter()
+					.filter_map(|(chan_id, phase)| match phase {
+						ChannelPhase::RenegotiatingFundingInbound((pre_chan, _)) |
+						ChannelPhase::RenegotiatingFundingOutbound((pre_chan, _)) |
+						ChannelPhase::RenegotiatingFundingPending((pre_chan, _)) => Some((chan_id, pre_chan)),
+						_ => None,
+					})
+					// .filter(f)
+					.map(|(_channel_id, channel)| {
+						ChannelDetails::from_channel_context(&channel.context, best_block_height,
+							peer_state.latest_features.clone(), &self.fee_estimator)
+					})
+				);
+				println!("QQQ list_funded_channels_with_filter {}", res.len());
 			}
 		}
 		res
@@ -4391,41 +4420,41 @@ where
 			let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 			let peer_state = &mut *peer_state_lock;
 			if let hash_map::Entry::Occupied(mut chan_phase_entry) = peer_state.channel_by_id.entry(id) {
-				match chan_phase_entry.get_mut() {
-					ChannelPhase::Funded(chan) => {
-						if !chan.context.is_live() {
-							return Err(APIError::ChannelUnavailable{err: "Peer for first hop currently disconnected".to_owned()});
-						}
-						let funding_txo = chan.context.get_funding_txo().unwrap();
-						let logger = WithChannelContext::from(&self.logger, &chan.context);
-						let send_res = chan.send_htlc_and_commit(htlc_msat, payment_hash.clone(),
-							htlc_cltv, HTLCSource::OutboundRoute {
-								path: path.clone(),
-								session_priv: session_priv.clone(),
-								first_hop_htlc_msat: htlc_msat,
-								payment_id,
-							}, onion_packet, None, &self.fee_estimator, &&logger);
-						match break_chan_phase_entry!(self, send_res, chan_phase_entry) {
-							Some(monitor_update) => {
-								match handle_new_monitor_update!(self, funding_txo, monitor_update, peer_state_lock, peer_state, per_peer_state, chan) {
-									false => {
-										// Note that MonitorUpdateInProgress here indicates (per function
-										// docs) that we will resend the commitment update once monitor
-										// updating completes. Therefore, we must return an error
-										// indicating that it is unsafe to retry the payment wholesale,
-										// which we do in the send_payment check for
-										// MonitorUpdateInProgress, below.
-										return Err(APIError::MonitorUpdateInProgress);
-									},
-									true => {},
-								}
-							},
-							None => {},
-						}
-					},
-					// TODO(splicing): handle RenegotiatingFundingPending
+				let chan = match chan_phase_entry.get_mut() {
+					ChannelPhase::Funded(chan) => { chan }
+					#[cfg(splicing)]
+					ChannelPhase::RenegotiatingFundingPending((chan, _)) => { chan }
 					_ => return Err(APIError::ChannelUnavailable{err: "Channel to first hop is unfunded".to_owned()}),
 				};
+				if !chan.context.is_live() {
+					return Err(APIError::ChannelUnavailable{err: "Peer for first hop currently disconnected".to_owned()});
+				}
+				let funding_txo = chan.context.get_funding_txo().unwrap();
+				let logger = WithChannelContext::from(&self.logger, &chan.context);
+				let send_res = chan.send_htlc_and_commit(htlc_msat, payment_hash.clone(),
+					htlc_cltv, HTLCSource::OutboundRoute {
+						path: path.clone(),
+						session_priv: session_priv.clone(),
+						first_hop_htlc_msat: htlc_msat,
+						payment_id,
+					}, onion_packet, None, &self.fee_estimator, &&logger);
+				match break_chan_phase_entry!(self, send_res, chan_phase_entry) {
+					Some(monitor_update) => {
+						match handle_new_monitor_update!(self, funding_txo, monitor_update, peer_state_lock, peer_state, per_peer_state, chan) {
+							false => {
+								// Note that MonitorUpdateInProgress here indicates (per function
+								// docs) that we will resend the commitment update once monitor
+								// updating completes. Therefore, we must return an error
+								// indicating that it is unsafe to retry the payment wholesale,
+								// which we do in the send_payment check for
+								// MonitorUpdateInProgress, below.
+								return Err(APIError::MonitorUpdateInProgress);
+							},
+							true => {},
+						}
+					},
+					None => {},
+				}
 			} else {
 				// The channel was likely removed after we fetched the id from the
 				// `short_to_chan_info` map, but before we successfully locked the
@@ -6537,12 +6566,20 @@ where
 				let peer_state = &mut *peer_state_lock;
 				match peer_state.channel_by_id.entry(channel_id) {
 					hash_map::Entry::Occupied(chan_phase_entry) => {
-						if let ChannelPhase::Funded(chan) = chan_phase_entry.get() {
-							self.get_htlc_inbound_temp_fail_err_and_data(0x1000|7, &chan)
-						} else {
-							// We shouldn't be trying to fail holding cell HTLCs on an unfunded channel.
-							debug_assert!(false);
-							(0x4000|10, Vec::new())
+						match chan_phase_entry.get() {
+							ChannelPhase::Funded(chan) => {
+								self.get_htlc_inbound_temp_fail_err_and_data(0x1000|7, &chan)
+							},
+							// Both post and pre exist
+							#[cfg(splicing)]
+							ChannelPhase::RenegotiatingFundingPending((chan, _)) => {
+								self.get_htlc_inbound_temp_fail_err_and_data(0x1000|7, &chan)
+							}
+							_ => {
+								// We shouldn't be trying to fail holding cell HTLCs on an unfunded channel.
+								debug_assert!(false);
+								(0x4000|10, Vec::new())
+							}
 						}
 					},
 					hash_map::Entry::Vacant(_) => (0x4000|10, Vec::new())
@@ -8215,6 +8252,7 @@ where
 
 	#[cfg(any(dual_funding, splicing))]
 	fn internal_tx_complete(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxComplete) -> Result<(), MsgHandleErrInternal> {
+		println!("QQQ internal_tx_complete"); // TODO remove
 		let per_peer_state = self.per_peer_state.read().unwrap();
 		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
 			.ok_or_else(|| {
@@ -8283,6 +8321,7 @@ where
 							"Got a tx_complete message with no interactive transaction construction expected or in-progress"
 							.into()))), None),
 					};
+					println!("QQQ internal_tx_complete  res {}  pre_splice_chan {}", res.is_ok(), pre_splice_chan.is_some()); // TODO remove
 					match res {
 						Ok((mut channel, commitment_signed, funding_ready_for_sig_event_opt)) => {
 							if let Some(funding_ready_for_sig_event) = funding_ready_for_sig_event_opt {
@@ -8302,6 +8341,7 @@ where
 							});
 							channel.set_next_funding_txid(&funding_txid);
 							if let Some(pre_chan) = pre_splice_chan {
+								println!("QQQ insert pre_chan {}", pre_chan.context.is_usable()); // TODO remove
 								peer_state.channel_by_id.insert(channel_id.clone(), ChannelPhase::RenegotiatingFundingPending((pre_chan, channel)));
 							} else {
 								peer_state.channel_by_id.insert(channel_id.clone(), ChannelPhase::Funded(channel));
@@ -8456,6 +8496,8 @@ where
 			})?;
 		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
 		let peer_state = &mut *peer_state_lock;
+
+		// Check
 		match peer_state.channel_by_id.entry(msg.channel_id) {
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				match chan_phase_entry.get_mut() {
@@ -8694,59 +8736,64 @@ where
 		let peer_state = &mut *peer_state_lock;
 		match peer_state.channel_by_id.entry(msg.channel_id) {
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
-				if let ChannelPhase::Funded(chan) = chan_phase_entry.get_mut() {
-					let mut pending_forward_info = match decoded_hop_res {
-						Ok((next_hop, shared_secret, next_packet_pk_opt)) =>
-							self.construct_pending_htlc_status(
-								msg, counterparty_node_id, shared_secret, next_hop,
-								chan.context.config().accept_underpaying_htlcs, next_packet_pk_opt,
-							),
-						Err(e) => PendingHTLCStatus::Fail(e)
-					};
-					let logger = WithChannelContext::from(&self.logger, &chan.context);
-					// If the update_add is completely bogus, the call will Err and we will close,
-					// but if we've sent a shutdown and they haven't acknowledged it yet, we just
-					// want to reject the new HTLC and fail it backwards instead of forwarding.
-					if let Err((_, error_code)) = chan.can_accept_incoming_htlc(&msg, &self.fee_estimator, &logger) {
-						if msg.blinding_point.is_some() {
-							pending_forward_info = PendingHTLCStatus::Fail(HTLCFailureMsg::Malformed(
-								msgs::UpdateFailMalformedHTLC {
+				let chan = match chan_phase_entry.get_mut() {
+					ChannelPhase::Funded(chan) => { chan }
+					// TODO on both pre and post ?
+					#[cfg(splcing)]
+					ChannelPhase::RenegotiatingFundingPending((chan, _)) => { chan }
+					_ => {
+						return try_chan_phase_entry!(self, Err(ChannelError::Close(
+							"Got an update_add_htlc message for an unfunded channel!".into())), chan_phase_entry);
+					}
+				};
+
+				let mut pending_forward_info = match decoded_hop_res {
+					Ok((next_hop, shared_secret, next_packet_pk_opt)) =>
+						self.construct_pending_htlc_status(
+							msg, counterparty_node_id, shared_secret, next_hop,
+							chan.context.config().accept_underpaying_htlcs, next_packet_pk_opt,
+						),
+					Err(e) => PendingHTLCStatus::Fail(e)
+				};
+				let logger = WithChannelContext::from(&self.logger, &chan.context);
+				// If the update_add is completely bogus, the call will Err and we will close,
+				// but if we've sent a shutdown and they haven't acknowledged it yet, we just
+				// want to reject the new HTLC and fail it backwards instead of forwarding.
+				if let Err((_, error_code)) = chan.can_accept_incoming_htlc(&msg, &self.fee_estimator, &logger) {
+					if msg.blinding_point.is_some() {
+						pending_forward_info = PendingHTLCStatus::Fail(HTLCFailureMsg::Malformed(
+							msgs::UpdateFailMalformedHTLC {
+								channel_id: msg.channel_id,
+								htlc_id: msg.htlc_id,
+								sha256_of_onion: [0; 32],
+								failure_code: INVALID_ONION_BLINDING,
+							}
+						))
+					} else {
+						match pending_forward_info {
+							PendingHTLCStatus::Forward(PendingHTLCInfo {
+								ref incoming_shared_secret, ref routing, ..
+							}) => {
+								let reason = if routing.blinded_failure().is_some() {
+									HTLCFailReason::reason(INVALID_ONION_BLINDING, vec![0; 32])
+								} else if (error_code & 0x1000) != 0 {
+									let (real_code, error_data) = self.get_htlc_inbound_temp_fail_err_and_data(error_code, chan);
+									HTLCFailReason::reason(real_code, error_data)
+								} else {
+									HTLCFailReason::from_failure_code(error_code)
+								}.get_encrypted_failure_packet(incoming_shared_secret, &None);
+								let msg = msgs::UpdateFailHTLC {
 									channel_id: msg.channel_id,
 									htlc_id: msg.htlc_id,
-									sha256_of_onion: [0; 32],
-									failure_code: INVALID_ONION_BLINDING,
-								}
-							))
-						} else {
-							match pending_forward_info {
-								PendingHTLCStatus::Forward(PendingHTLCInfo {
-									ref incoming_shared_secret, ref routing, ..
-								}) => {
-									let reason = if routing.blinded_failure().is_some() {
-										HTLCFailReason::reason(INVALID_ONION_BLINDING, vec![0; 32])
-									} else if (error_code & 0x1000) != 0 {
-										let (real_code, error_data) = self.get_htlc_inbound_temp_fail_err_and_data(error_code, chan);
-										HTLCFailReason::reason(real_code, error_data)
-									} else {
-										HTLCFailReason::from_failure_code(error_code)
-									}.get_encrypted_failure_packet(incoming_shared_secret, &None);
-									let msg = msgs::UpdateFailHTLC {
-										channel_id: msg.channel_id,
-										htlc_id: msg.htlc_id,
-										reason
-									};
-									pending_forward_info = PendingHTLCStatus::Fail(HTLCFailureMsg::Relay(msg));
-								},
-								_ => {},
-							}
+									reason
+								};
+								pending_forward_info = PendingHTLCStatus::Fail(HTLCFailureMsg::Relay(msg));
+							},
+							_ => {},
 						}
 					}
-					try_chan_phase_entry!(self, chan.update_add_htlc(&msg, pending_forward_info, &self.fee_estimator), chan_phase_entry);
-				} else {
-					// TODO(splicing): also handle RenegotiatingFundingPending
-					return try_chan_phase_entry!(self, Err(ChannelError::Close(
-						"Got an update_add_htlc message for an unfunded channel!".into())), chan_phase_entry);
 				}
+				try_chan_phase_entry!(self, chan.update_add_htlc(&msg, pending_forward_info, &self.fee_estimator), chan_phase_entry);
 			},
 			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id))
 		}
@@ -8870,10 +8917,13 @@ where
 		let peer_state = &mut *peer_state_lock;
 		match peer_state.channel_by_id.entry(msg.channel_id) {
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
+				println!("QQQ internal_commitment_signed"); // TODO remove
 				match chan_phase_entry.get_mut() {
 					ChannelPhase::Funded(chan) => {
+						println!("QQQ internal_commitment_signed  Funded"); // TODO remove
 						let logger = WithChannelContext::from(&self.logger, &chan.context);
 						let funding_txo = chan.context.get_funding_txo();
+						println!("QQQ internal_commitment_signed  Funded funding_txo {:?}", funding_txo); // TODO remove
 
 						#[cfg(any(dual_funding, splicing))]
 						let interactive_tx_signing_in_progress = chan.interactive_tx_signing_session.is_some();
@@ -8908,36 +8958,80 @@ where
 						}
 						Ok(())
 					},
+					// TODO: Handle on both !!!
 					#[cfg(splicing)]
-					ChannelPhase::RenegotiatingFundingPending((_pre_chan, post_chan)) => {
-						// TODO(splicing): handle on pre as well
+					ChannelPhase::RenegotiatingFundingPending((pre_chan, post_chan)) => {
+						println!("QQQ internal_commitment_signed  RenegotiatingFundingPending"); // TODO remove
 						let logger = WithChannelContext::from(&self.logger, &post_chan.context);
-						let post_funding_txo = post_chan.context.get_funding_txo();
+						/*
+						{ // PRE
+							// // Commented out due to borrow issues
+							let pre_funding_txo = pre_chan.context.get_funding_txo();
+							let monitor_update_opt = try_chan_phase_entry!(self, pre_chan.commitment_signed(&msg, &&logger), chan_phase_entry);
+							if let Some(monitor_update) = monitor_update_opt {
+								handle_new_monitor_update!(self, pre_funding_txo.unwrap(), monitor_update, peer_state_lock,
+									peer_state, per_peer_state, pre_chan);
+							}
+						}
+						*/
+						{ // POST
+							let post_funding_txo = post_chan.context.get_funding_txo();
+							println!("QQQ internal_commitment_signed  RenegotiatingFundingPending post_funding_txo {:?}", post_funding_txo); // TODO remove
 
-						#[cfg(any(dual_funding, splicing))]
-						// TODO(splicing): For splice pending case expand this condition, depending if commitment was already received or not
-						let interactive_tx_signing_in_progress = post_chan.interactive_tx_signing_session.is_some();
-						#[cfg(not(any(dual_funding, splicing)))]
-						let interactive_tx_signing_in_progress = false;
-
-						if interactive_tx_signing_in_progress {
 							#[cfg(any(dual_funding, splicing))]
-							{
-								let monitor = try_chan_phase_entry!(self,
-									post_chan.commitment_signed_initial_v2(&msg, best_block, &self.signer_provider, &&logger), chan_phase_entry);
-								if let Ok(persist_status) = self.chain_monitor.watch_channel(post_chan.context.get_funding_txo().unwrap(), monitor) {
-									if let Some(tx_signatures) = post_chan.interactive_tx_signing_session.as_mut().map(|session| session.received_commitment_signed(msg.clone())).flatten() {
-										// At this point we have received a commitment signed and we are watching the channel so
-										// we're good to send our tx_signatures if we're up first.
-										peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxSignatures {
-											node_id: *counterparty_node_id,
-											msg: tx_signatures,
-										});
+							let interactive_tx_signing_in_progress = if let Some(itx) = &post_chan.interactive_tx_signing_session {
+								println!("QQQ internal_commitment_signed  rec_comm_sig {}", itx.get_received_commitment_signed().is_none()); // TODO remove
+								itx.get_received_commitment_signed().is_none() // we have an interactive TX, and commitment signed was not received yet, this is the first one
+							} else {
+								false // no interactive TX session
+							};
+							#[cfg(not(any(dual_funding, splicing)))]
+							let interactive_tx_signing_in_progress = false;
+
+							println!("QQQ internal_commitment_signed RenegotiatingFundingPending {}", interactive_tx_signing_in_progress); // TODO remove
+							if interactive_tx_signing_in_progress {
+								#[cfg(any(dual_funding, splicing))]
+								{
+									let monitor = try_chan_phase_entry!(self,
+										post_chan.commitment_signed_initial_v2(&msg, best_block, &self.signer_provider, &&logger), chan_phase_entry);
+									if let Ok(persist_status) = self.chain_monitor.watch_channel(post_chan.context.get_funding_txo().unwrap(), monitor) {
+										if let Some(tx_signatures) = post_chan.interactive_tx_signing_session.as_mut().map(|session| session.received_commitment_signed(msg.clone())).flatten() {
+											// At this point we have received a commitment signed and we are watching the channel so
+											// we're good to send our tx_signatures if we're up first.
+											peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxSignatures {
+												node_id: *counterparty_node_id,
+												msg: tx_signatures,
+											});
+										}
+										handle_new_monitor_update!(self, persist_status, peer_state_lock, peer_state, per_peer_state, post_chan, INITIAL_MONITOR);
+									} else {
+										try_chan_phase_entry!(self, Err(ChannelError::Close("Channel funding outpoint was a duplicate".to_owned())), chan_phase_entry)
 									}
-									handle_new_monitor_update!(self, persist_status, peer_state_lock, peer_state, per_peer_state, post_chan, INITIAL_MONITOR);
-								} else {
-									try_chan_phase_entry!(self, Err(ChannelError::Close("Channel funding outpoint was a duplicate".to_owned())), chan_phase_entry)
 								}
+							} else {
+								println!("QQQ internal_commitment_signed iatx not in progress"); // TODO remove
+
+								{ // PRE
+									let funding_txo = pre_chan.context.get_funding_txo();
+									let monitor_update_opt = try_chan_phase_entry!(self, pre_chan.commitment_signed(&msg, &&logger), chan_phase_entry);
+									if let Some(monitor_update) = monitor_update_opt {
+										println!("QQQ internal_commitment_signed monitor_update_opt"); // TODO remove
+										handle_new_monitor_update!(self, funding_txo.unwrap(), monitor_update, peer_state_lock,
+											peer_state, per_peer_state, pre_chan);
+									}
+								}
+
+								/*
+								{
+									// POST
+									// // is this needed?
+									let monitor_update_opt = try_chan_phase_entry!(self, post_chan.commitment_signed(&msg, &&logger), chan_phase_entry);
+									if let Some(monitor_update) = monitor_update_opt {
+										handle_new_monitor_update!(self, post_funding_txo.unwrap(), monitor_update, peer_state_lock,
+											peer_state, per_peer_state, post_chan);
+									}
+								}
+								*/
 							}
 						}
 						Ok(())
@@ -9120,28 +9214,33 @@ where
 			let peer_state = &mut *peer_state_lock;
 			match peer_state.channel_by_id.entry(msg.channel_id) {
 				hash_map::Entry::Occupied(mut chan_phase_entry) => {
-					if let ChannelPhase::Funded(chan) = chan_phase_entry.get_mut() {
-						let logger = WithChannelContext::from(&self.logger, &chan.context);
-						let funding_txo_opt = chan.context.get_funding_txo();
-						let mon_update_blocked = if let Some(funding_txo) = funding_txo_opt {
-							self.raa_monitor_updates_held(
-								&peer_state.actions_blocking_raa_monitor_updates, funding_txo, msg.channel_id,
-								*counterparty_node_id)
-						} else { false };
-						let (htlcs_to_fail, monitor_update_opt) = try_chan_phase_entry!(self,
-							chan.revoke_and_ack(&msg, &self.fee_estimator, &&logger, mon_update_blocked), chan_phase_entry);
-						if let Some(monitor_update) = monitor_update_opt {
-							let funding_txo = funding_txo_opt
-								.expect("Funding outpoint must have been set for RAA handling to succeed");
-							handle_new_monitor_update!(self, funding_txo, monitor_update,
-								peer_state_lock, peer_state, per_peer_state, chan);
+					let chan = match chan_phase_entry.get_mut() {
+						ChannelPhase::Funded(chan) => { chan }
+						// Both post and pre exist
+						// TODO handle on both
+						#[cfg(splicing)]
+						ChannelPhase::RenegotiatingFundingPending((chan, _)) => { chan }
+						_ => {
+							return try_chan_phase_entry!(self, Err(ChannelError::Close(
+								"Got a revoke_and_ack message for an unfunded channel!".into())), chan_phase_entry);
 						}
-						htlcs_to_fail
-					} else {
-						// TODO(splicing): Handle RenegotiatingFundingPending
-						return try_chan_phase_entry!(self, Err(ChannelError::Close(
-							"Got a revoke_and_ack message for an unfunded channel!".into())), chan_phase_entry);
+					};
+					let logger = WithChannelContext::from(&self.logger, &chan.context);
+					let funding_txo_opt = chan.context.get_funding_txo();
+					let mon_update_blocked = if let Some(funding_txo) = funding_txo_opt {
+						self.raa_monitor_updates_held(
+							&peer_state.actions_blocking_raa_monitor_updates, funding_txo, msg.channel_id,
+							*counterparty_node_id)
+					} else { false };
+					let (htlcs_to_fail, monitor_update_opt) = try_chan_phase_entry!(self,
+						chan.revoke_and_ack(&msg, &self.fee_estimator, &&logger, mon_update_blocked), chan_phase_entry);
+					if let Some(monitor_update) = monitor_update_opt {
+						let funding_txo = funding_txo_opt
+							.expect("Funding outpoint must have been set for RAA handling to succeed");
+						handle_new_monitor_update!(self, funding_txo, monitor_update,
+							peer_state_lock, peer_state, per_peer_state, chan);
 					}
+					htlcs_to_fail
 				},
 				hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id))
 			}
@@ -9445,6 +9544,7 @@ where
 
 		// Add the modified channel
 		let post_chan_id = post_chan.context.channel_id();
+		println!("QQQ splice_init {}", prev_chan.context.is_usable());
 		peer_state.channel_by_id.insert(post_chan_id, ChannelPhase::RenegotiatingFundingInbound((prev_chan, post_chan)));
 
 		// Perform state changes
@@ -9498,6 +9598,7 @@ where
 			hash_map::Entry::Vacant(_) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id)),
 			hash_map::Entry::Occupied(chan) => {
 				if let ChannelPhase::Funded(chan) = chan.get() {
+					println!("QQQ splice_ack funded {}", chan.context.is_usable());
 					// check if splice is pending
 					if let Some(pending_splice) = &chan.context.pending_splice_pre {
 						// Note: this is incomplete (their funding contribution is not set)
@@ -9524,6 +9625,7 @@ where
 				}
 			}
 		};
+		println!("QQQ splice_ack prev_chan {}", prev_chan.context.is_usable());
 
 		let post_chan = RenegotiatingChannel::new_spliced(
 			true,
@@ -9540,6 +9642,7 @@ where
 
 		// Add the modified channel
 		let post_chan_id = post_chan.context.channel_id();
+		println!("QQQ splice_ack {}", prev_chan.context.is_usable());
 		peer_state.channel_by_id.insert(post_chan_id, ChannelPhase::RenegotiatingFundingOutbound((prev_chan, post_chan)));
 
 		// Perform state changes
