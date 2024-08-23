@@ -569,7 +569,7 @@ pub enum InboundChannelFunds {
 	/// Indicates the open request is for a dual funded channel.
 	///
 	/// Note that these channels do not support starting with initial funds pushed from the counterparty,
-	// who is the channel opener in this case.
+	/// who is the channel opener in this case.
 	DualFunded,
 }
 
