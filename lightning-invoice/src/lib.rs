@@ -77,51 +77,11 @@ mod prelude {
 
 use crate::prelude::*;
 
-/// Interface to write `Fe32`s into a sink
-pub trait WriteBase32 {
-	/// Write error
-	type Err: fmt::Debug;
-
-	/// Write a `Fe32` slice
-	fn write(&mut self, data: &Vec<Fe32>) -> Result<(), Self::Err> {
-		for b in data {
-			self.write_fe32(*b)?;
-		}
-		Ok(())
-	}
-
-	/// Write a single `Fe32`
-	fn write_fe32(&mut self, data: Fe32) -> Result<(), Self::Err>;
-}
-
-/// A trait for converting a value to a type `T` that represents a `Fe32` slice.
-pub trait ToBase32 {
-	/// Convert `Self` to base32 vector
-	fn to_base32(&self) -> Vec<Fe32> {
-		let mut vec = Vec::new();
-		self.write_base32(&mut vec).unwrap();
-		vec
-	}
-
-	/// Encode as base32 and write it to the supplied writer
-	/// Implementations shouldn't allocate.
-	fn write_base32<W: WriteBase32>(&self, writer: &mut W) -> Result<(), <W as WriteBase32>::Err>;
-}
-
-/// Interface to calculate the length of the base32 representation before actually serializing
-pub trait Base32Len: ToBase32 {
-	/// Calculate the base32 serialized length
-	fn base32_len(&self) -> usize;
-}
-
-/// Trait for paring/converting base32 slice. It is the reciprocal of `ToBase32`.
-pub trait FromBase32: Sized {
-	/// The associated error which can be returned from parsing (e.g. because of bad padding).
-	type Err;
-
-	/// Convert a base32 slice to `Self`.
-	fn from_base32(b32: &[Fe32]) -> Result<Self, Self::Err>;
-}
+/// Re-export serialization traits
+#[cfg(fuzzing)]
+pub use crate::ser::Base32Iterable;
+#[cfg(fuzzing)]
+pub use crate::de::FromBase32;
 
 /// Errors that indicate what is wrong with the invoice. They have some granularity for debug
 /// reasons, but should generally result in an "invalid BOLT11 invoice" message for the user.
@@ -345,6 +305,15 @@ pub struct RawHrp {
 
 	/// SI prefix that gets multiplied with the `raw_amount`
 	pub si_prefix: Option<SiPrefix>,
+}
+
+impl RawHrp {
+	/// Convert to bech32::Hrp
+	pub fn to_hrp(&self) -> bech32::Hrp {
+		let hrp_str = self.to_string();
+		let s = core::str::from_utf8(&hrp_str.as_bytes()).expect("asserted to be ASCII");
+		bech32::Hrp::parse_unchecked(s)
+	}
 }
 
 /// Data of the [`RawBolt11Invoice`] that is encoded in the data part
@@ -1024,6 +993,8 @@ macro_rules! find_all_extract {
 impl RawBolt11Invoice {
 	/// Hash the HRP as bytes and signatureless data part.
 	fn hash_from_parts(hrp_bytes: &[u8], data_without_signature: &[Fe32]) -> [u8; 32] {
+		use crate::de::FromBase32;
+
 		let mut preimage = Vec::<u8>::from(hrp_bytes);
 
 		let mut data_part = Vec::from(data_without_signature);
@@ -1048,9 +1019,11 @@ impl RawBolt11Invoice {
 
 	/// Calculate the hash of the encoded `RawBolt11Invoice` which should be signed.
 	pub fn signable_hash(&self) -> [u8; 32] {
+		use crate::ser::Base32Iterable;
+
 		RawBolt11Invoice::hash_from_parts(
 			self.hrp.to_string().as_bytes(),
-			&self.data.to_base32()
+			&self.data.fe_iter().collect::<Vec<Fe32>>(),
 		)
 	}
 

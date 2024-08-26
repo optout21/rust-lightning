@@ -1,20 +1,19 @@
-use crate::{
-	sha256, FromBase32, PayeePubKey, PaymentSecret, PositiveTimestamp, RawDataPart, Sha256,
-};
-use bech32::{Base32Len, ToBase32};
-
+use crate::de::FromBase32;
+use crate::ser::{Base32Iterable, Base32Len};
+use crate::{sha256, PayeePubKey, PaymentSecret, PositiveTimestamp, RawDataPart, Sha256};
+use bech32::Fe32;
 use core::fmt::Debug;
 use std::str::FromStr;
 
 /// Test base32 encode and decode
 fn ser_de_test<T>(o: T, expected_str: &str)
 where
-	T: ToBase32 + FromBase32 + Eq + Debug,
+	T: Base32Iterable + FromBase32 + Eq + Debug,
 	T::Err: Debug,
 {
-	let serialized_32 = o.to_base32();
+	let serialized_32 = o.fe_iter().collect::<Vec<Fe32>>();
 	let serialized_str = serialized_32.iter().map(|f| f.to_char()).collect::<String>();
-	assert_eq!(serialized_str, expected_str);
+	assert_eq!(serialized_str, expected_str, "Mismatch for {:?}", o);
 
 	// deserialize back
 	let o2 = T::from_base32(&serialized_32).unwrap();
@@ -24,10 +23,10 @@ where
 /// Test base32 encode and decode, and also length hint
 fn ser_de_test_len<T>(o: T, expected_str: &str)
 where
-	T: ToBase32 + FromBase32 + Base32Len + Eq + Debug,
+	T: Base32Iterable + Base32Len + FromBase32 + Eq + Debug,
 	T::Err: Debug,
 {
-	assert_eq!(o.base32_len(), expected_str.len());
+	assert_eq!(o.base32_len(), expected_str.len(), "Mismatch for {} {:?}", expected_str, o);
 
 	ser_de_test(o, expected_str)
 }

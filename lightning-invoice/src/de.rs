@@ -23,9 +23,18 @@ use bitcoin::secp256k1::PublicKey;
 
 use super::{Bolt11Invoice, Sha256, TaggedField, ExpiryTime, MinFinalCltvExpiryDelta, Fallback, PayeePubKey, Bolt11InvoiceSignature, PositiveTimestamp,
 	Bolt11SemanticError, PrivateRoute, Bolt11ParseError, ParseOrSemanticError, Description, RawTaggedField, Currency, RawHrp, SiPrefix, RawBolt11Invoice,
-	constants, SignedRawBolt11Invoice, RawDataPart, Bolt11InvoiceFeatures, FromBase32};
+	constants, SignedRawBolt11Invoice, RawDataPart, Bolt11InvoiceFeatures};
 
 use self::hrp_sm::parse_hrp;
+
+/// Trait for paring/converting base32 slice.
+pub trait FromBase32: Sized {
+	/// The associated error which can be returned from parsing (e.g. because of bad padding).
+	type Err;
+
+	/// Convert a base32 slice to `Self`.
+	fn from_base32(b32: &[Fe32]) -> Result<Self, Self::Err>;
+}
 
 // FromBase32 implementations are here, because the trait is in this module.
 
@@ -40,22 +49,21 @@ impl FromBase32 for Vec<u8> {
 impl FromBase32 for PaymentSecret {
 	type Err = CheckedHrpstringError;
 
-	fn from_base32(field_data: &[Fe32]) -> Result<PaymentSecret, CheckedHrpstringError> {
+	fn from_base32(field_data: &[Fe32]) -> Result<Self, Self::Err> {
 		if field_data.len() != 52 {
 			return Err(CheckedHrpstringError::Checksum(ChecksumError::InvalidLength)) // TODO(bech32): not entirely accurate
-		} else {
-			let data_bytes = Vec::<u8>::from_base32(field_data)?;
-			let mut payment_secret = [0; 32];
-			payment_secret.copy_from_slice(&data_bytes);
-			Ok(PaymentSecret(payment_secret))
 		}
+		let data_bytes = Vec::<u8>::from_base32(field_data)?;
+		let mut payment_secret = [0; 32];
+		payment_secret.copy_from_slice(&data_bytes);
+		Ok(PaymentSecret(payment_secret))
 	}
 }
 
 impl FromBase32 for Bolt11InvoiceFeatures {
 	type Err = CheckedHrpstringError;
 
-	fn from_base32(field_data: &[Fe32]) -> Result<Bolt11InvoiceFeatures, CheckedHrpstringError> {
+	fn from_base32(field_data: &[Fe32]) -> Result<Self, Self::Err> {
 		// Explanation for the "7": the normal way to round up when dividing is to add the divisor
 		// minus one before dividing
 		let length_bytes = (field_data.len() * 5 + 7) / 8 as usize;
