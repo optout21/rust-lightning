@@ -1107,6 +1107,11 @@ pub(super) enum OpenChannelMessage {
 	V2(msgs::OpenChannelV2),
 }
 
+pub(super) enum OpenChannelMessageRef<'a> {
+	V1(&'a msgs::OpenChannel),
+	V2(&'a msgs::OpenChannelV2),
+}
+
 /// A not-yet-accepted inbound (from counterparty) channel. Once
 /// accepted, the parameters will be used to construct a channel.
 pub(super) struct InboundChannelRequest {
@@ -7390,10 +7395,10 @@ where
 		num_unfunded_channels + peer.inbound_channel_request_by_id.len()
 	}
 
-	fn internal_open_channel(&self, counterparty_node_id: &PublicKey, msg: OpenChannelMessage) -> Result<(), MsgHandleErrInternal> {
+	fn internal_open_channel(&self, counterparty_node_id: &PublicKey, msg: OpenChannelMessageRef<'_>) -> Result<(), MsgHandleErrInternal> {
 		let (chain_hash, temporary_channel_id) = match msg {
-			OpenChannelMessage::V1(ref msg) => (msg.common_fields.chain_hash, msg.common_fields.temporary_channel_id),
-			OpenChannelMessage::V2(ref msg) => (msg.common_fields.chain_hash, msg.common_fields.temporary_channel_id),
+			OpenChannelMessageRef::V1(msg) => (msg.common_fields.chain_hash, msg.common_fields.temporary_channel_id),
+			OpenChannelMessageRef::V2(msg) => (msg.common_fields.chain_hash, msg.common_fields.temporary_channel_id),
 		};
 
 		// Do common open_channel(2) checks
@@ -7456,7 +7461,7 @@ where
 
 		// Version-specific checks and logic
 		match msg {
-			OpenChannelMessage::V1(ref msg) => {
+			OpenChannelMessageRef::V1(msg) => {
 				// If we're doing manual acceptance checks on the channel, then defer creation until we're sure we want to accept.
 				if self.default_configuration.manually_accept_inbound_channels {
 					let channel_type = channel::channel_type_from_open_channel(
@@ -7514,7 +7519,7 @@ where
 				});
 				peer_state.channel_by_id.insert(temporary_channel_id, ChannelPhase::UnfundedInboundV1(channel));
 			},
-			OpenChannelMessage::V2(ref msg) => {
+			OpenChannelMessageRef::V2(msg) => {
 				// If we're doing manual acceptance checks on the channel, then defer creation until we're sure
 				// we want to accept and, optionally, contribute to the channel value.
 				if self.default_configuration.manually_accept_inbound_channels {
@@ -7907,13 +7912,13 @@ where
 	fn internal_tx_signatures(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxSignatures) {
 		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
 			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+			 msg.channel_id)), *counterparty_node_id);
 	}
 
 	fn internal_tx_abort(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAbort) {
 		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
 			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+			 msg.channel_id)), *counterparty_node_id);
 	}
 
 	fn internal_channel_ready(&self, counterparty_node_id: &PublicKey, msg: &msgs::ChannelReady) -> Result<(), MsgHandleErrInternal> {
@@ -10382,7 +10387,7 @@ where
 		// open_channel message - pre-funded channels are never written so there should be no
 		// change to the contents.
 		let _persistence_guard = PersistenceNotifierGuard::optionally_notify(self, || {
-			let res = self.internal_open_channel(counterparty_node_id, OpenChannelMessage::V1(msg.clone()));
+			let res = self.internal_open_channel(counterparty_node_id, OpenChannelMessageRef::V1(msg));
 			let persist = match &res {
 				Err(e) if e.closes_channel() => {
 					debug_assert!(false, "We shouldn't close a new channel");
@@ -10400,7 +10405,7 @@ where
 		// open_channel message - pre-funded channels are never written so there should be no
 		// change to the contents.
 		let _persistence_guard = PersistenceNotifierGuard::optionally_notify(self, || {
-			let res = self.internal_open_channel(counterparty_node_id, OpenChannelMessage::V2(msg.clone()));
+			let res = self.internal_open_channel(counterparty_node_id, OpenChannelMessageRef::V2(msg));
 			let persist = match &res {
 				Err(e) if e.closes_channel() => {
 					debug_assert!(false, "We shouldn't close a new channel");
