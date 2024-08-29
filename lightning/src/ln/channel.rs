@@ -1640,10 +1640,12 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 				)));
 		};
 		self.context_mut().channel_transaction_parameters.funding_outpoint = Some(outpoint);
-		let channel_transaction_parameters = self.context().channel_transaction_parameters.clone();
-		self.context_mut().holder_signer.as_mut().provide_channel_parameters(&channel_transaction_parameters);
+		{
+			let channel_context = self.context_mut();
+			channel_context.holder_signer.as_mut().provide_channel_parameters(&channel_context.channel_transaction_parameters);
+		}
 
-		let commitment_signed = get_initial_commitment_signed(self.context_mut(), signing_session.unsigned_tx.clone(), logger);
+		let commitment_signed = get_initial_commitment_signed(self.context_mut(), &signing_session.unsigned_tx, logger);
 		let commitment_signed = match commitment_signed {
 			Ok(commitment_signed) => commitment_signed,
 			Err(err) => return Err(ChannelError::Close((err.to_string(), ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) }))),
@@ -9067,7 +9069,7 @@ where
 }
 
 fn get_initial_commitment_signed<SP:Deref, L: Deref>(
-	context: &mut ChannelContext<SP>, transaction: ConstructedTransaction, logger: &L
+	context: &mut ChannelContext<SP>, transaction: &ConstructedTransaction, logger: &L
 ) -> Result<msgs::CommitmentSigned, ChannelError>
 where
 	SP::Target: SignerProvider,

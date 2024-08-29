@@ -307,8 +307,8 @@ impl InteractiveTxSigningSession {
 		if self.counterparty_tx_signatures.is_some() {
 			return (None, None);
 		};
-		self.counterparty_tx_signatures = Some(tx_signatures.clone());
 		self.unsigned_tx.add_remote_witnesses(tx_signatures.witnesses.clone());
+		self.counterparty_tx_signatures = Some(tx_signatures);
 
 		let holder_tx_signatures = if !self.holder_sends_tx_signatures_first {
 			self.holder_tx_signatures.clone()
