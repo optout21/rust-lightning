@@ -8049,17 +8049,6 @@ where
 		}
 	}
 
-	fn maybe_reset_interactive_tx_state(
-		tx_constructor: &mut Option<InteractiveTxConstructor>,
-		channel_id: ChannelId,
-	) -> Option<msgs::TxAbort> {
-		// If we have not reset the negtotiation state yet, we must echo back a `tx_abort`.
-		tx_constructor.take().map(|_| msgs::TxAbort {
-			channel_id,
-			data: "Acknowledged tx_abort".to_string().into_bytes(),
-		})
-	}
-
 	fn internal_tx_abort(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAbort)
 	-> Result<(), MsgHandleErrInternal> {
 		let per_peer_state = self.per_peer_state.read().unwrap();
@@ -8075,23 +8064,24 @@ where
 		match peer_state.channel_by_id.entry(msg.channel_id) {
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				let channel_phase = chan_phase_entry.get_mut();
-				let tx_abort_opt = match channel_phase {
-					ChannelPhase::UnfundedInboundV2(chan) => Self::maybe_reset_interactive_tx_state(
-						chan.interactive_tx_constructor_mut(), msg.channel_id),
-					ChannelPhase::UnfundedOutboundV2(chan) => Self::maybe_reset_interactive_tx_state(
-						chan.interactive_tx_constructor_mut(), msg.channel_id),
-					ChannelPhase::Funded(chan) => Self::maybe_reset_interactive_tx_state(
-						&mut chan.interactive_tx_constructor, msg.channel_id),
+				let tx_constructor = match channel_phase {
+					ChannelPhase::UnfundedInboundV2(chan) => chan.interactive_tx_constructor_mut(),
+					ChannelPhase::UnfundedOutboundV2(chan) => chan.interactive_tx_constructor_mut(),
+					ChannelPhase::Funded(chan) => &mut chan.interactive_tx_constructor,
 					_ => try_chan_phase_entry!(self, Err(ChannelError::Close(
 						(
 							"Got an unexpected tx_signatures message".into(),
 							ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
 						))), chan_phase_entry)
 				};
-				if let Some(tx_abort) = tx_abort_opt {
+				if tx_constructor.take().is_some() {
+					let msg = msgs::TxAbort {
+						channel_id: msg.channel_id,
+						data: "Acknowledged tx_abort".to_string().into_bytes(),
+					};
 					peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxAbort {
 						node_id: *counterparty_node_id,
-						msg: tx_abort,
+						msg,
 					});
 				}
 				Ok(())
