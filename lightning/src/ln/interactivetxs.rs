@@ -29,6 +29,7 @@ use crate::ln::types::ChannelId;
 use crate::sign::{EntropySource, P2TR_KEY_PATH_WITNESS_WEIGHT, P2WPKH_WITNESS_WEIGHT};
 use crate::util::ser::TransactionU16LenLimited;
 
+use core::fmt::Display;
 use core::ops::Deref;
 
 /// The number of received `tx_add_input` messages during a negotiation at which point the
@@ -112,7 +113,13 @@ pub(crate) enum AbortReason {
 
 impl AbortReason {
 	pub fn into_tx_abort_msg(self, channel_id: ChannelId) -> msgs::TxAbort {
-		let msg = match self {
+		msgs::TxAbort { channel_id, data: self.to_string().into_bytes() }
+	}
+}
+
+impl Display for AbortReason {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		f.write_str(match self {
 			AbortReason::InvalidStateTransition => "State transition was invalid",
 			AbortReason::UnexpectedCounterpartyMessage => "Unexpected message",
 			AbortReason::ReceivedTooManyTxAddInputs => "Too many `tx_add_input`s received",
@@ -141,10 +148,7 @@ impl AbortReason {
 			AbortReason::InvalidLowFundingOutputValue => {
 				"Local part of funding output value is greater than the funding output value"
 			},
-		}
-		.to_string();
-
-		msgs::TxAbort { channel_id, data: msg.into_bytes() }
+		})
 	}
 }
 

@@ -1542,9 +1542,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 			Err(err) => {
 				Err(APIError::APIMisuseError { err:
 					match err {
-						AbortReason::MissingFundingOutput => "Funding output missing".into(),
-						AbortReason::DuplicateFundingOutput => "Duplicate funding output".into(),
-						AbortReason::InvalidLowFundingOutputValue => "Local part of funding output is greater than the output value".into(),
+						AbortReason::MissingFundingOutput | AbortReason::DuplicateFundingOutput | AbortReason::InvalidLowFundingOutputValue => err.to_string(),
 						_ => {
 							"Error starting interactive transaction construction".into()
 						}
@@ -1560,7 +1558,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 				|reason| reason.into_tx_abort_msg(self.context().channel_id())),
 			None => Err(msgs::TxAbort {
 				channel_id: self.context().channel_id(),
-				data: "We do not have an interactive transaction negotiation in progress".to_string().into_bytes()
+				data: b"No interactive transaction negotiation in progress".to_vec()
 			}),
 		})
 	}
@@ -1571,7 +1569,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 				|reason| reason.into_tx_abort_msg(self.context().channel_id())),
 			None => Err(msgs::TxAbort {
 				channel_id: self.context().channel_id(),
-				data: "We do not have an interactive transaction negotiation in progress".to_string().into_bytes()
+				data: b"No interactive transaction negotiation in progress".to_vec()
 			}),
 		})
 	}
@@ -1582,7 +1580,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 				|reason| reason.into_tx_abort_msg(self.context().channel_id())),
 			None => Err(msgs::TxAbort {
 				channel_id: self.context().channel_id(),
-				data: "We do not have an interactive transaction negotiation in progress".to_string().into_bytes()
+				data: b"No interactive transaction negotiation in progress".to_vec()
 			}),
 		})
 	}
@@ -1593,7 +1591,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 				|reason| reason.into_tx_abort_msg(self.context().channel_id())),
 			None => Err(msgs::TxAbort {
 				channel_id: self.context().channel_id(),
-				data: "We do not have an interactive transaction negotiation in progress".to_string().into_bytes()
+				data: b"No interactive transaction negotiation in progress".to_vec()
 			}),
 		})
 	}
@@ -1604,7 +1602,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 				|reason| reason.into_tx_abort_msg(self.context().channel_id())),
 			None => Err(msgs::TxAbort {
 				channel_id: self.context().channel_id(),
-				data: "We do not have an interactive transaction negotiation in progress".to_string().into_bytes()
+				data: b"No interactive transaction negotiation in progress".to_vec()
 			}),
 		})
 	}
@@ -3787,11 +3785,11 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 
 	// Interactive transaction construction
 
-	pub fn tx_signatures(&self, msg: &msgs::TxSignatures)-> Result<InteractiveTxMessageSend, ChannelError> {
+	pub fn tx_signatures(&self, msg: &msgs::TxSignatures) -> Result<InteractiveTxMessageSend, ChannelError> {
 		todo!();
 	}
 
-	pub fn tx_abort(&self, msg: &msgs::TxAbort)-> Result<InteractiveTxMessageSend, ChannelError> {
+	pub fn tx_abort(&self, msg: &msgs::TxAbort) -> Result<InteractiveTxMessageSend, ChannelError> {
 		todo!();
 	}
 }
@@ -8684,21 +8682,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 			entropy_source,
 		);
 		let pending_msg_send_event = match tx_msg_opt_res {
-			Ok(tx_msg_opt) => {
-				if let Some(tx_msg) = tx_msg_opt {
-					let msg_send_event = match tx_msg {
-						InteractiveTxMessageSend::TxAddInput(msg) => MessageSendEvent::SendTxAddInput {
-							node_id: channel.context.counterparty_node_id, msg },
-						InteractiveTxMessageSend::TxAddOutput(msg) => MessageSendEvent::SendTxAddOutput {
-							node_id: channel.context.counterparty_node_id, msg },
-						InteractiveTxMessageSend::TxComplete(msg) => MessageSendEvent::SendTxComplete {
-							node_id: channel.context.counterparty_node_id, msg },
-					};
-					Some(msg_send_event)
-				} else {
-					None
-				}
-			},
+			Ok(tx_msg_opt) => tx_msg_opt.map(|tx_msg| tx_msg.into_msg_send_event(&channel.context.counterparty_node_id)),
 			Err(_) => {
 				return Err(ChannelError::Close((
 					"V2 channel rejected due to sender error".into(),
