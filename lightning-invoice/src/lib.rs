@@ -33,8 +33,8 @@ extern crate serde;
 #[cfg(feature = "std")]
 use std::time::SystemTime;
 
-use bech32::Fe32;
 use bech32::primitives::decode::CheckedHrpstringError;
+use bech32::Fe32;
 use bitcoin::{Address, Network, PubkeyHash, ScriptHash, WitnessProgram, WitnessVersion};
 use bitcoin::hashes::{Hash, sha256};
 use lightning_types::features::Bolt11InvoiceFeatures;
@@ -79,9 +79,9 @@ use crate::prelude::*;
 
 /// Re-export serialization traits
 #[cfg(fuzzing)]
-pub use crate::ser::Base32Iterable;
-#[cfg(fuzzing)]
 pub use crate::de::FromBase32;
+#[cfg(fuzzing)]
+pub use crate::ser::Base32Iterable;
 
 /// Errors that indicate what is wrong with the invoice. They have some granularity for debug
 /// reasons, but should generally result in an "invalid BOLT11 invoice" message for the user.
@@ -89,7 +89,6 @@ pub use crate::de::FromBase32;
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Bolt11ParseError {
 	Bech32Error(CheckedHrpstringError),
-	GenericBech32Error,
 	ParseAmountError(ParseIntError),
 	MalformedSignature(bitcoin::secp256k1::Error),
 	BadPrefix,
@@ -105,7 +104,8 @@ pub enum Bolt11ParseError {
 	InvalidPubKeyHashLength,
 	InvalidScriptHashLength,
 	InvalidRecoveryId,
-	InvalidSliceLength(String),
+	// Invalid length, with actual length, expected length, and function info
+	InvalidSliceLength(usize, usize, String),
 
 	/// Not an error, but used internally to signal that a part of the invoice should be ignored
 	/// according to BOLT11
@@ -439,10 +439,18 @@ impl PartialOrd for RawTaggedField {
 impl Ord for RawTaggedField {
 	fn cmp(&self, other: &Self) -> core::cmp::Ordering {
 		match (self, other) {
-			(RawTaggedField::KnownSemantics(ref a), RawTaggedField::KnownSemantics(ref b)) => a.cmp(b),
-			(RawTaggedField::UnknownSemantics(ref a), RawTaggedField::UnknownSemantics(ref b)) => a.iter().map(|a| a.to_u8()).cmp(b.iter().map(|b| b.to_u8())),
-			(RawTaggedField::KnownSemantics(..), RawTaggedField::UnknownSemantics(..)) => core::cmp::Ordering::Less,
-			(RawTaggedField::UnknownSemantics(..), RawTaggedField::KnownSemantics(..)) => core::cmp::Ordering::Greater,
+			(RawTaggedField::KnownSemantics(ref a), RawTaggedField::KnownSemantics(ref b)) => {
+				a.cmp(b)
+			},
+			(RawTaggedField::UnknownSemantics(ref a), RawTaggedField::UnknownSemantics(ref b)) => {
+				a.iter().map(|a| a.to_u8()).cmp(b.iter().map(|b| b.to_u8()))
+			},
+			(RawTaggedField::KnownSemantics(..), RawTaggedField::UnknownSemantics(..)) => {
+				core::cmp::Ordering::Less
+			},
+			(RawTaggedField::UnknownSemantics(..), RawTaggedField::KnownSemantics(..)) => {
+				core::cmp::Ordering::Greater
+			},
 		}
 	}
 }

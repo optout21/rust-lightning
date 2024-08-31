@@ -79,35 +79,50 @@ impl Base32Len for PaymentSecret {
 }
 
 impl Base32Iterable for Bolt11InvoiceFeatures {
+	/// Convert to 5-bit values, by unpacking the 5 bit groups,
+	/// putting the bytes from right-to-left,
+	/// starting from the rightmost bit,
+	/// and taking the resulting 5-bit values in reverse (left-to-right),
+	/// with the leading 0's skipped.
 	fn fe_iter<'s>(&'s self) -> Box<dyn Iterator<Item = Fe32> + 's> {
-		// Note: here bytes are grouped into 5-bit values from rigth-to-left, therefore
-		// Bech32 convversion cannot be used.
-		// Explanation for the "4": the normal way to round up when dividing is to add the divisor
-		// minus one before dividing
-		let length_u5s = (self.le_flags().len() * 8 + 4) / 5 as usize;
-		let mut res_u5s: Vec<Fe32> = vec![Fe32::Q; length_u5s];
-		for (byte_idx, byte) in self.le_flags().iter().enumerate() {
-			let bit_pos_from_left_0_indexed = byte_idx * 8;
-			let new_u5_idx = length_u5s - (bit_pos_from_left_0_indexed / 5) as usize - 1;
-			let new_bit_pos = bit_pos_from_left_0_indexed % 5;
-			let shifted_chunk_u16 = (*byte as u16) << new_bit_pos;
-			let curr_u5_as_u8 = res_u5s[new_u5_idx].to_u8();
-			res_u5s[new_u5_idx] = Fe32::try_from(curr_u5_as_u8 | ((shifted_chunk_u16 & 0x001f) as u8)).unwrap();
-			if new_u5_idx > 0 {
-				let curr_u5_as_u8 = res_u5s[new_u5_idx - 1].to_u8();
-				res_u5s[new_u5_idx - 1] = Fe32::try_from(curr_u5_as_u8 | (((shifted_chunk_u16 >> 5) & 0x001f) as u8)).unwrap();
-			}
-			if new_u5_idx > 1 {
-				let curr_u5_as_u8 = res_u5s[new_u5_idx - 2].to_u8();
-				res_u5s[new_u5_idx - 2] = Fe32::try_from(curr_u5_as_u8 | (((shifted_chunk_u16 >> 10) & 0x001f) as u8)).unwrap();
-			}
-		}
-		// Trim the highest feature bits.
-		while !res_u5s.is_empty() && res_u5s[0] == Fe32::Q {
-			res_u5s.remove(0);
-		}
+		// Fe32 conversion cannot be used, because this packs from right, right-to-left
+		let mut input_iter = self.le_flags().iter();
+		// Carry bits, 0..7 bits
+		let mut carry = 0u8;
+		let mut carry_bits = 0;
+		let mut output = Vec::<Fe32>::new();
 
-		Box::new(res_u5s.into_iter())
+		loop {
+			let next_out8 = if carry_bits >= 5 {
+				// We have enough carry bits for an output, no need to read the input
+				let next_out8 = carry;
+				carry >>= 5;
+				carry_bits -= 5;
+				next_out8
+			} else {
+				// take next byte
+				if let Some(curr_in) = input_iter.next() {
+					// we have at least one Fe32 to output (maybe two)
+					// For combining with carry '|', '^', or '+' can be used (disjoint bit positions)
+					let next_out8 = carry + (curr_in << carry_bits);
+					carry = curr_in >> (5 - carry_bits);
+					carry_bits += 3; // added 8, removed 5
+					next_out8
+				} else {
+					// No more inputs, output remaining (if any)
+					if carry_bits > 0 {
+						carry_bits = 0;
+						carry
+					} else {
+						break;
+					}
+				}
+			};
+			// Isolate the 5 right bits
+			output.push(Fe32::try_from(next_out8 & 31u8).expect("<32"))
+		}
+		// Take result in reverse order, and skip leading 0s
+		Box::new(output.into_iter().rev().skip_while(|e| *e == Fe32::Q))
 	}
 }
 
@@ -139,10 +154,13 @@ impl Display for Bolt11Invoice {
 impl Display for SignedRawBolt11Invoice {
 	fn fmt(&self, f: &mut Formatter) -> fmt::Result {
 		let hrp = self.raw_invoice.hrp.to_hrp();
-		for ch in
-			self.raw_invoice.data.fe_iter()
+		for ch in self
+			.raw_invoice
+			.data
+			.fe_iter()
 			.chain(self.signature.fe_iter())
-			.with_checksum::<bech32::Bech32>(&hrp).chars()
+			.with_checksum::<bech32::Bech32>(&hrp)
+			.chars()
 		{
 			write!(f, "{}", ch)?;
 		}
@@ -203,9 +221,8 @@ impl Display for SiPrefix {
 fn encode_int_be_base32(int: u64) -> Vec<Fe32> {
 	let base = 32u64;
 
-	const LEN: usize = (64 + 4) / 5;
-	debug_assert!(LEN == 13); // for validating LEN (mutants)
-	let mut out_vec = Vec::<Fe32>::with_capacity(LEN);
+	// (64 + 4) / 5 == 13
+	let mut out_vec = Vec::<Fe32>::with_capacity(13);
 	let mut rem_int = int;
 	while rem_int != 0 {
 		out_vec.push(Fe32::try_from((rem_int % base) as u8).expect("always <32"));
@@ -244,9 +261,7 @@ impl Base32Iterable for RawTaggedField {
 		// Annoyingly, when we move to explicit types, we will need an
 		// explicit enum holding the two iterator variants.
 		match *self {
-			RawTaggedField::UnknownSemantics(ref content) => {
-				Box::new(content.iter().copied())
-			},
+			RawTaggedField::UnknownSemantics(ref content) => Box::new(content.iter().copied()),
 			RawTaggedField::KnownSemantics(ref tagged_field) => tagged_field.fe_iter(),
 		}
 	}
@@ -315,18 +330,18 @@ impl Base32Len for MinFinalCltvExpiryDelta {
 impl Base32Iterable for Fallback {
 	fn fe_iter<'s>(&'s self) -> Box<dyn Iterator<Item = Fe32> + 's> {
 		Box::new(match *self {
-			Fallback::SegWitProgram {version: v, program: ref p} => {
+			Fallback::SegWitProgram { version: v, program: ref p } => {
 				let v = Fe32::try_from(v.to_num()).expect("valid version");
 				core::iter::once(v).chain(p[..].fe_iter())
-			}
+			},
 			Fallback::PubKeyHash(ref hash) => {
 				// 17 '3'
 				core::iter::once(Fe32::_3).chain(hash[..].fe_iter())
-			}
+			},
 			Fallback::ScriptHash(ref hash) => {
 				// 18 'J'
 				core::iter::once(Fe32::J).chain(hash[..].fe_iter())
-			}
+			},
 		})
 	}
 }
@@ -334,18 +349,25 @@ impl Base32Iterable for Fallback {
 impl Base32Len for Fallback {
 	fn base32_len(&self) -> usize {
 		match *self {
-			Fallback::SegWitProgram {program: ref p, ..} => {
+			Fallback::SegWitProgram { program: ref p, .. } => {
 				bytes_size_to_base32_size(p.len()) + 1
 			},
-			Fallback::PubKeyHash(_) | Fallback::ScriptHash(_) => {
-				33
-			},
+			Fallback::PubKeyHash(_) | Fallback::ScriptHash(_) => 33,
 		}
 	}
 }
 
 // Shorthand type
-type RouteHintHopIter = iter::Chain<iter::Chain<iter::Chain<iter::Chain<array::IntoIter<u8, 33>, array::IntoIter<u8, 8>>, array::IntoIter<u8, 4>>, array::IntoIter<u8, 4>>, array::IntoIter<u8, 2>>;
+type RouteHintHopIter = iter::Chain<
+	iter::Chain<
+		iter::Chain<
+			iter::Chain<array::IntoIter<u8, 33>, array::IntoIter<u8, 8>>,
+			array::IntoIter<u8, 4>,
+		>,
+		array::IntoIter<u8, 4>,
+	>,
+	array::IntoIter<u8, 2>,
+>;
 
 impl Base32Iterable for PrivateRoute {
 	fn fe_iter<'s>(&'s self) -> Box<dyn Iterator<Item = Fe32> + 's> {
@@ -375,8 +397,11 @@ impl Base32Iterable for TaggedField {
 	fn fe_iter<'s>(&'s self) -> Box<dyn Iterator<Item = Fe32> + 's> {
 		/// Writes a tagged field: tag, length and data. `tag` should be in `0..32` otherwise the
 		/// function will panic.
-		fn write_tagged_field<'s, P>(tag: u8, payload: &'s P) -> TaggedFieldIter<Box<dyn Iterator<Item = Fe32> + 's>>
-			where P: Base32Iterable + Base32Len + ?Sized
+		fn write_tagged_field<'s, P>(
+			tag: u8, payload: &'s P,
+		) -> TaggedFieldIter<Box<dyn Iterator<Item = Fe32> + 's>>
+		where
+			P: Base32Iterable + Base32Len + ?Sized,
 		{
 			let len = payload.base32_len();
 			assert!(len < 1024, "Every tagged field data can be at most 1023 bytes long.");
@@ -385,7 +410,9 @@ impl Base32Iterable for TaggedField {
 				Fe32::try_from(tag).expect("invalid tag, not in 0..32"),
 				Fe32::try_from((len / 32) as u8).expect("< 32"),
 				Fe32::try_from((len % 32) as u8).expect("< 32"),
-			].into_iter().chain(payload.fe_iter())
+			]
+			.into_iter()
+			.chain(payload.fe_iter())
 		}
 
 		// we will also need a giant enum for this
@@ -431,9 +458,10 @@ impl Base32Iterable for Bolt11InvoiceSignature {
 	fn fe_iter<'s>(&'s self) -> Box<dyn Iterator<Item = Fe32> + 's> {
 		let (recovery_id, signature) = self.0.serialize_compact();
 		Box::new(
-			signature.into_iter()
+			signature
+				.into_iter()
 				.chain(core::iter::once(recovery_id.to_i32() as u8))
-				.bytes_to_fes()
+				.bytes_to_fes(),
 		)
 	}
 }
@@ -470,7 +498,11 @@ mod test {
 		use bech32::Fe32;
 
 		let input: u64 = 33764;
-		let expected_out = [1, 0, 31, 4].iter().copied().map(|v| Fe32::try_from(v).expect("<= 31")).collect::<Vec<Fe32>>();
+		let expected_out = [1, 0, 31, 4]
+			.iter()
+			.copied()
+			.map(|v| Fe32::try_from(v).expect("<= 31"))
+			.collect::<Vec<Fe32>>();
 
 		assert_eq!(expected_out, encode_int_be_base32(input));
 	}

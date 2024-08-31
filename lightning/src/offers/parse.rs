@@ -71,7 +71,7 @@ mod sealed {
 			encode_to_fmt::<NoChecksum, _>(f, Hrp::parse(Self::BECH32_HRP).unwrap(), self.as_ref())
 				.map_err(|e| match e {
 					EncodeError::Fmt(e) => e,
-					_ => fmt::Error::default(),
+					_ => fmt::Error {},
 				})
 		}
 	}
