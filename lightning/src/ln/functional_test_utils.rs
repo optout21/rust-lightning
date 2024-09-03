@@ -37,17 +37,20 @@ use crate::util::test_utils;
 use crate::util::test_utils::{TestChainMonitor, TestScorer, TestKeysInterface};
 use crate::util::ser::{ReadableArgs, Writeable};
 
+use bitcoin::WPubkeyHash;
 use bitcoin::amount::Amount;
+use bitcoin::blockdata::script::ScriptBuf;
+use bitcoin::blockdata::witness::Witness;
 use bitcoin::block::{Block, Header, Version};
-use bitcoin::locktime::absolute::LockTime;
-use bitcoin::transaction::{Transaction, TxIn, TxOut};
+use bitcoin::locktime::absolute::{LOCK_TIME_THRESHOLD, LockTime};
+use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut};
 use bitcoin::hash_types::{BlockHash, TxMerkleNode};
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash as _;
 use bitcoin::network::Network;
 use bitcoin::pow::CompactTarget;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
-use bitcoin::transaction;
+use bitcoin::transaction::{self, Version as TxVersion};
 
 use alloc::rc::Rc;
 use core::cell::RefCell;
@@ -1169,6 +1172,37 @@ pub fn create_coinbase_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
  -> (ChannelId, Transaction, OutPoint)
 {
 	internal_create_funding_transaction(node, expected_counterparty_node_id, expected_chan_value, expected_user_chan_id, true)
+}
+
+pub fn create_dual_funding_utxos_with_prev_txs<'a, 'b, 'c>(
+	node: &Node<'a, 'b, 'c>, utxo_values_in_satoshis: &[u64],
+) -> Vec<(TxIn, Transaction)> {
+	// Ensure we have unique transactions per node by using the locktime.
+	let tx = Transaction {
+		version: TxVersion::TWO,
+		lock_time: LockTime::from_height(
+			u32::from_be_bytes(node.keys_manager.get_secure_random_bytes()[0..4].try_into().unwrap()) % LOCK_TIME_THRESHOLD
+		).unwrap(),
+		input: vec![],
+		output: utxo_values_in_satoshis.iter().map(|value_satoshis| TxOut {
+			value: Amount::from_sat(*value_satoshis), script_pubkey: ScriptBuf::new_p2wpkh(&WPubkeyHash::all_zeros()),
+		}).collect()
+	};
+
+	let mut result = vec![];
+	for i in 0..utxo_values_in_satoshis.len() {
+		result.push(
+			(TxIn {
+				previous_output: OutPoint {
+					txid: tx.compute_txid(),
+					index: i as u16,
+				}.into_bitcoin_outpoint(),
+				script_sig: ScriptBuf::new(),
+				sequence: Sequence::ZERO,
+				witness: Witness::new(),
+			}, tx.clone()));
+	}
+	result
 }
 
 fn internal_create_funding_transaction<'a, 'b, 'c>(node: &Node<'a, 'b, 'c>,
