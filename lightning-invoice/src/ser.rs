@@ -85,6 +85,19 @@ impl Base32Iterable for Bolt11InvoiceFeatures {
 	/// and taking the resulting 5-bit values in reverse (left-to-right),
 	/// with the leading 0's skipped.
 	fn fe_iter<'s>(&'s self) -> Box<dyn Iterator<Item = Fe32> + 's> {
+		Box::new(
+			self
+				.le_flags()
+				.iter()
+				.map(|b| b.reverse_bits())
+				.bytes_to_fes()
+				.collect::<Vec<Fe32>>().into_iter() // <-- COULD NOT DO WITHOUT COLLECT
+				.rev()
+				.map(|f| Fe32::try_from(f.to_u8().reverse_bits() >> 3).expect("<32"))
+				.skip_while(|e| *e == Fe32::Q)
+		)
+
+		/*
 		// Fe32 conversion cannot be used, because this packs from right, right-to-left
 		let mut input_iter = self.le_flags().iter();
 		// Carry bits, 0..7 bits
@@ -123,6 +136,7 @@ impl Base32Iterable for Bolt11InvoiceFeatures {
 		}
 		// Take result in reverse order, and skip leading 0s
 		Box::new(output.into_iter().rev().skip_while(|e| *e == Fe32::Q))
+		*/
 	}
 }
 

@@ -85,6 +85,27 @@ impl FromBase32 for Bolt11InvoiceFeatures {
 	/// and taking the resulting 8-bit values (right to left),
 	/// with the leading 0's skipped.
 	fn from_base32(field_data: &[Fe32]) -> Result<Self, Self::Err> {
+		// fes_to_bytes() trims, input needs to be padded, find padding size
+		let input_len = field_data.len();
+		let mut padding = 0;
+		while ((input_len + padding) * 5) % 8 != 0 {
+			padding += 1;
+		}
+		let mut output = field_data
+			.iter()
+			.map(|f| Fe32::try_from(f.to_u8().reverse_bits() >> 3).expect("<32"))
+			.rev()
+			.chain(core::iter::repeat(Fe32::Q).take(padding))
+			.fes_to_bytes()
+			.map(|b| b.reverse_bits())
+			.collect::<Vec<u8>>();
+		// Trim the highest feature bits -<-- COULD NOT DO WITH ITER
+		while !output.is_empty() && output[output.len() - 1] == 0 {
+			output.pop();
+		}
+		Ok(Bolt11InvoiceFeatures::from_le_bytes(output))
+
+		/*
 		// Fe32 conversion cannot be used, because this unpacks from right, right-to-left
 		// Carry bits, 0, 1, 2, 3, or 4 bits
 		let mut carry_bits = 0;
@@ -116,6 +137,7 @@ impl FromBase32 for Bolt11InvoiceFeatures {
 			output.pop();
 		}
 		Ok(Bolt11InvoiceFeatures::from_le_bytes(output))
+		*/
 	}
 }
 
