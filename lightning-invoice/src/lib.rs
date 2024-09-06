@@ -43,6 +43,7 @@ use bitcoin::secp256k1::PublicKey;
 use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::secp256k1::ecdsa::RecoverableSignature;
 
+use alloc::boxed::Box;
 use core::cmp::Ordering;
 use core::fmt::{Display, Formatter, self};
 use core::iter::FilterMap;
@@ -999,6 +1000,12 @@ macro_rules! find_all_extract {
 
 #[allow(missing_docs)]
 impl RawBolt11Invoice {
+	/// Hash the HRP (as bytes) and signatureless data part (as Fe32 iterator)
+	fn hash_from_parts_iter<'s>(hrp_bytes: &[u8], data_without_signature_iter: Box<dyn Iterator<Item = Fe32> + 's>) -> [u8; 32] {
+		let data_part_signature = data_without_signature_iter.collect::<Vec<Fe32>>();
+		Self::hash_from_parts(hrp_bytes, &data_part_signature[..])
+	}
+
 	/// Hash the HRP as bytes and signatureless data part.
 	fn hash_from_parts(hrp_bytes: &[u8], data_without_signature: &[Fe32]) -> [u8; 32] {
 		use crate::de::FromBase32;
@@ -1029,9 +1036,9 @@ impl RawBolt11Invoice {
 	pub fn signable_hash(&self) -> [u8; 32] {
 		use crate::ser::Base32Iterable;
 
-		RawBolt11Invoice::hash_from_parts(
+		RawBolt11Invoice::hash_from_parts_iter(
 			self.hrp.to_string().as_bytes(),
-			&self.data.fe_iter().collect::<Vec<Fe32>>(),
+			self.data.fe_iter(),
 		)
 	}
 
