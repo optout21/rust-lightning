@@ -528,6 +528,31 @@ pub enum Fallback {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Bolt11InvoiceSignature(pub RecoverableSignature);
 
+/*
+impl Bolt11InvoiceSignature {
+	fn from_bytes(data: &[u8]) -> Result<Self, Bolt11ParseError> {
+		use bitcoin::secp256k1::ecdsa::{RecoveryId, RecoverableSignature};
+
+		const SIGNATURE_LEN: usize = 65;
+		if data.len() != SIGNATURE_LEN {
+			return Err(Bolt11ParseError::InvalidSliceLength(
+				data.len(),
+				SIGNATURE_LEN,
+				"Bolt11InvoiceSignature::from_bytes()".into(),
+			));
+		}
+		let signature = &data[0..64];
+		let recovery_id = RecoveryId::from_i32(data[64] as i32)?;
+		debug_assert_eq!(recovery_id.to_i32(), 0);
+
+		Ok(Bolt11InvoiceSignature(RecoverableSignature::from_compact(
+			signature,
+			recovery_id
+		)?))
+	}
+}
+*/
+
 impl PartialOrd for Bolt11InvoiceSignature {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		Some(self.cmp(other))
@@ -998,6 +1023,84 @@ macro_rules! find_all_extract {
 	};
 }
 
+/// Adaptor to pad a Fe32 iter
+// #[derive(Clone, PartialEq, Eq)]
+pub struct FesPadder<I: Iterator<Item = Fe32>> {
+	end_reached: bool,
+	fe32_count: usize,
+	pad_count: u8,
+	iter: I,
+}
+
+impl<I> FesPadder<I>
+where
+	I: Iterator<Item = Fe32>,
+{
+	// type Item = u8;
+
+	fn new(iter: I) -> Self {
+		Self {
+			end_reached: false,
+			fe32_count: 0,
+			pad_count: 0,
+			iter,
+		}
+	}
+
+	fn pad_count_from_fe32_count(fe32_count: usize) -> u8 {
+		let remainder = (fe32_count * 5) % 8;
+		if remainder == 0 { 0 } else if remainder < 3 { 2 } else { 1 }
+	}
+
+	fn padded_count(fe32_count: usize) -> usize {
+		fe32_count + Self::pad_count_from_fe32_count(fe32_count) as usize
+	}
+}
+
+impl<I> Iterator for FesPadder<I>
+where
+	I: Iterator<Item = Fe32>,
+{
+	type Item = Fe32;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		if let Some(elem) = self.iter.next() {
+			self.fe32_count += 1;
+			Some(elem)
+		} else {
+			// end reached
+			if !self.end_reached {
+				self.end_reached = true;
+				self.pad_count = Self::pad_count_from_fe32_count(self.fe32_count);
+			}
+			if self.pad_count > 0 {
+				self.pad_count -= 1;
+				Some(Fe32::Q)
+			} else {
+				None
+			}
+		}
+	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		let (fes_min, fes_max) = self.iter.size_hint();
+		// +1 because we set last_fe with call to `next`.
+		let min = Self::padded_count(fes_min + 1);
+		let max = fes_max.map(|max| Self::padded_count(max));
+		(min, max)
+	}
+}
+
+/// Trait to pad an Fe32 iterator
+pub trait FesPaddable: Sized + Iterator<Item = Fe32> {
+	/// Pad the iterator
+	fn pad_fes(self) -> FesPadder<Self> {
+		FesPadder::new(self)
+	}
+}
+
+impl<I> FesPaddable for I where I: Iterator<Item = Fe32> {}
+
 #[allow(missing_docs)]
 impl RawBolt11Invoice {
 	/// Hash the HRP (as bytes) and signatureless data part (as Fe32 iterator)
@@ -1008,35 +1111,45 @@ impl RawBolt11Invoice {
 
 	/// Hash the HRP as bytes and signatureless data part.
 	fn hash_from_parts(hrp_bytes: &[u8], data_without_signature: &[Fe32]) -> [u8; 32] {
-		use crate::de::FromBase32;
+		use crate::bech32::Fe32IterExt;
 
+		let data_part = Vec::from(data_without_signature);
 		let mut preimage = Vec::<u8>::from(hrp_bytes);
-
-		let mut data_part = Vec::from(data_without_signature);
-		let overhang = (data_part.len() * 5) % 8;
-		if overhang > 0 {
-			// add padding if data does not end at a byte boundary
-			data_part.push(Fe32::try_from(0).unwrap());
-
-			// if overhang is in (1..3) we need to add Fe32(0) padding two times
-			if overhang < 3 {
-				data_part.push(Fe32::try_from(0).unwrap());
-			}
-		}
-
-		preimage.extend_from_slice(&Vec::<u8>::from_base32(&data_part)
-			.expect("No padding error may occur due to appended zero above."));
+		preimage.extend_from_slice(
+			&data_part
+				.iter()
+				.copied()
+				// fes_to_bytes() trims, input needs to be padded
+				.pad_fes()
+				.fes_to_bytes()
+				.collect::<Vec<u8>>()
+		);
 
 		let mut hash: [u8; 32] = Default::default();
 		hash.copy_from_slice(&sha256::Hash::hash(&preimage)[..]);
 		hash
 	}
 
+	/*
+	/// Hash the HRP as bytes and signatureless data part.
+	fn hash_from_parts_u8(hrp_bytes: &[u8], data_without_signature: &[u8]) -> [u8; 32] {
+		// use crate::de::FromBase32;
+
+		let mut preimage = Vec::<u8>::from(hrp_bytes);
+		let data_part = Vec::from(data_without_signature);
+		preimage.extend(data_part);
+
+		let mut hash: [u8; 32] = Default::default();
+		hash.copy_from_slice(&sha256::Hash::hash(&preimage)[..]);
+		hash
+	}
+	*/
+
 	/// Calculate the hash of the encoded `RawBolt11Invoice` which should be signed.
 	pub fn signable_hash(&self) -> [u8; 32] {
 		use crate::ser::Base32Iterable;
 
-		RawBolt11Invoice::hash_from_parts_iter(
+		Self::hash_from_parts_iter(
 			self.hrp.to_string().as_bytes(),
 			self.data.fe_iter(),
 		)

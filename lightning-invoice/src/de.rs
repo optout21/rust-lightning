@@ -85,21 +85,18 @@ impl FromBase32 for Bolt11InvoiceFeatures {
 	/// and taking the resulting 8-bit values (right to left),
 	/// with the leading 0's skipped.
 	fn from_base32(field_data: &[Fe32]) -> Result<Self, Self::Err> {
-		// fes_to_bytes() trims, input needs to be padded, find padding size
-		let input_len = field_data.len();
-		let mut padding = 0;
-		while ((input_len + padding) * 5) % 8 != 0 {
-			padding += 1;
-		}
+		use crate::FesPaddable;
+
 		let mut output = field_data
 			.iter()
 			.map(|f| Fe32::try_from(f.to_u8().reverse_bits() >> 3).expect("<32"))
 			.rev()
-			.chain(core::iter::repeat(Fe32::Q).take(padding))
+			// fes_to_bytes() trims, input needs to be padded
+			.pad_fes()
 			.fes_to_bytes()
 			.map(|b| b.reverse_bits())
 			.collect::<Vec<u8>>();
-		// Trim the highest feature bits -<-- COULD NOT DO WITH ITER
+		// Trim the highest feature bits <-- COULD NOT DO WITH ITER
 		while !output.is_empty() && output[output.len() - 1] == 0 {
 			output.pop();
 		}
@@ -386,10 +383,8 @@ impl FromStr for SignedRawBolt11Invoice {
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
 		let parsed = CheckedHrpstring::new::<Bech32>(s)?;
 		let hrp = parsed.hrp();
-		// Access original non-packed 32 byte values (as ascii + conversion)
-		let data: Vec<_> = parsed.data_part_ascii_no_checksum().iter()
-			.map(|ch| Fe32::from_char(char::from(*ch)).expect("value should be < 32"))
-			.collect();
+		// Access original non-packed 32 byte values (as Fe32s)
+		let data: Vec<_> = parsed.fe32_iter::<alloc::boxed::Box<dyn Iterator<Item = u8>>>().collect();
 
 		const SIGNATURE_LEN5: usize = 104; // 32-bit values, 65 bytes
 		if data.len() < SIGNATURE_LEN5 {
@@ -398,16 +393,15 @@ impl FromStr for SignedRawBolt11Invoice {
 
 		let raw_hrp: RawHrp = hrp.to_string().to_lowercase().parse()?;
 		let data_part = RawDataPart::from_base32(&data[..data.len() - SIGNATURE_LEN5])?;
+		let raw_invoice = RawBolt11Invoice {
+			hrp: raw_hrp,
+			data: data_part,
+		};
+		let hash = raw_invoice.signable_hash();
 
 		Ok(SignedRawBolt11Invoice {
-			raw_invoice: RawBolt11Invoice {
-				hrp: raw_hrp,
-				data: data_part,
-			},
-			hash: RawBolt11Invoice::hash_from_parts(
-				hrp.to_string().as_bytes(),
-				&data[..data.len() - SIGNATURE_LEN5],
-			),
+			raw_invoice,
+			hash,
 			signature: Bolt11InvoiceSignature::from_base32(&data[data.len() - SIGNATURE_LEN5..])?,
 		})
 	}
