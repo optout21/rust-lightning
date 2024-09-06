@@ -71,10 +71,8 @@ impl FromBase32 for PaymentSecret {
 				"PaymentSecret::from_base32()".into(),
 			));
 		}
-		let data_bytes = Vec::<u8>::from_base32(field_data)?;
-		let mut payment_secret = [0; 32];
-		payment_secret.copy_from_slice(&data_bytes);
-		Ok(PaymentSecret(payment_secret))
+		let data_bytes = <[u8; 32]>::from_base32(field_data)?;
+		Ok(PaymentSecret(data_bytes))
 	}
 }
 

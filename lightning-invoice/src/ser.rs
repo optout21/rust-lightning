@@ -128,8 +128,8 @@ impl Base32Iterable for Bolt11InvoiceFeatures {
 
 impl Base32Len for Bolt11InvoiceFeatures {
 	fn base32_len(&self) -> usize {
-		// Here we actually do the conversion
-		self.fe_iter().collect::<Vec<Fe32>>().len()
+		// Here we perform the real conversion, due to trimming it's hard to estimate
+		self.fe_iter().count()
 	}
 }
 
