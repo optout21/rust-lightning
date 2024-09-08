@@ -1047,9 +1047,18 @@ where
 		}
 	}
 
+	/// Compute how many trailing extra 5-bit elements are needed
+	/// such that no significant bits are dropped if the last byte is dropped.
+	/// Returns 0 (result falls on byte boundary), 1, or 2.
 	fn pad_count_from_fe32_count(fe32_count: usize) -> u8 {
-		let remainder = (fe32_count * 5) % 8;
-		if remainder == 0 { 0 } else if remainder < 3 { 2 } else { 1 }
+		let leftover_bits = (fe32_count * 5) % 8;
+		if leftover_bits == 0 {
+			0
+		} else {
+			let needed_bits = 8 - leftover_bits; // 1..7
+			let needed_extra_fe32s = (needed_bits + (5 - 1)) / 5; // 1..2
+			needed_extra_fe32s as u8
+		}
 	}
 
 	fn padded_count(fe32_count: usize) -> usize {
