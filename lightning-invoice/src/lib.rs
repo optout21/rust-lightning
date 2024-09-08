@@ -1130,6 +1130,30 @@ impl RawBolt11Invoice {
 		hash
 	}
 
+	/// Hash ...
+	fn preimage_from_parts_iter<'s>(hrp_bytes: &[u8], data_without_signature_iter: Box<dyn Iterator<Item = Fe32> + 's>) -> Vec<u8> {
+		let data_part_signature = data_without_signature_iter.collect::<Vec<Fe32>>();
+		Self::preimage_from_parts(hrp_bytes, &data_part_signature[..])
+	}
+
+	/// Hash ...
+	fn preimage_from_parts(hrp_bytes: &[u8], data_without_signature: &[Fe32]) -> Vec<u8> {
+		use crate::bech32::Fe32IterExt;
+
+		let data_part = Vec::from(data_without_signature);
+		let mut preimage = Vec::<u8>::from(hrp_bytes);
+		preimage.extend_from_slice(
+			&data_part
+				.iter()
+				.copied()
+				// fes_to_bytes() trims, input needs to be padded
+				.pad_fes()
+				.fes_to_bytes()
+				.collect::<Vec<u8>>()
+		);
+		preimage
+	}
+
 	/*
 	/// Hash the HRP as bytes and signatureless data part.
 	fn hash_from_parts_u8(hrp_bytes: &[u8], data_without_signature: &[u8]) -> [u8; 32] {
@@ -1150,6 +1174,16 @@ impl RawBolt11Invoice {
 		use crate::ser::Base32Iterable;
 
 		Self::hash_from_parts_iter(
+			self.hrp.to_string().as_bytes(),
+			self.data.fe_iter(),
+		)
+	}
+
+	/// Calculate the hash of the encoded `RawBolt11Invoice` which should be signed.
+	pub fn hash_preimage(&self) -> Vec<u8> {
+		use crate::ser::Base32Iterable;
+
+		Self::preimage_from_parts_iter(
 			self.hrp.to_string().as_bytes(),
 			self.data.fe_iter(),
 		)

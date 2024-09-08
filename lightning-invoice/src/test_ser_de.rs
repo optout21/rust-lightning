@@ -259,3 +259,126 @@ fn private_route() {
 		"qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqgzqvzq2ps8pqqqqqqpqqqqq9qqqv",
 	);
 }
+
+#[test]
+fn test_invoice_hash() {
+	use crate::{RawBolt11Invoice, RawHrp, RawDataPart, Currency, PositiveTimestamp};
+	use crate::TaggedField::*;
+
+	let invoice = RawBolt11Invoice {
+		hrp: RawHrp {
+			currency: Currency::Bitcoin,
+			raw_amount: None,
+			si_prefix: None,
+		},
+		data: RawDataPart {
+			timestamp: PositiveTimestamp::from_unix_timestamp(1496314658).unwrap(),
+			tagged_fields: vec![
+				PaymentHash(crate::Sha256(sha256::Hash::from_str(
+					"0001020304050607080900010203040506070809000102030405060708090102"
+				).unwrap())).into(),
+				Description(crate::Description::new(
+					"Please consider supporting this project".to_owned()
+				).unwrap()).into(),
+			],
+		},
+	};
+
+	let expected_hash = [
+		0xc3, 0xd4, 0xe8, 0x3f, 0x64, 0x6f, 0xa7, 0x9a, 0x39, 0x3d, 0x75, 0x27, 0x7b, 0x1d,
+		0x85, 0x8d, 0xb1, 0xd1, 0xf7, 0xab, 0x71, 0x37, 0xdc, 0xb7, 0x83, 0x5d, 0xb2, 0xec,
+		0xd5, 0x18, 0xe1, 0xc9
+	];
+
+	assert_eq!(invoice.signable_hash(), expected_hash)
+}
+
+#[test]
+fn test_invoice_construct() {
+	use crate::TaggedField::*;
+	use bitcoin::secp256k1::ecdsa::{RecoveryId, RecoverableSignature};
+	use crate::{SignedRawBolt11Invoice, Bolt11InvoiceSignature, RawBolt11Invoice, RawHrp, RawDataPart, Currency, Sha256,
+		 PositiveTimestamp};
+	// use bitcoin::bitcoin_hashes::Hash;
+
+	let raw_invoice = RawBolt11Invoice {
+		hrp: RawHrp {
+			currency: Currency::Bitcoin,
+			raw_amount: None,
+			si_prefix: None,
+		},
+		data: RawDataPart {
+			timestamp: PositiveTimestamp::from_unix_timestamp(100_000).unwrap(),
+			tagged_fields: vec ! [
+				Description(
+					crate::Description::new(
+						"AAAAAABCD".to_owned()
+					).unwrap()
+				).into(),
+				PaymentHash(Sha256(*sha256::Hash::from_bytes_mut(&mut [2; 32]))).into(),
+			],
+		},
+	};
+	let hash_preimage = raw_invoice.hash_preimage();
+	let hash = raw_invoice.signable_hash();
+
+	let inv = SignedRawBolt11Invoice {
+		raw_invoice,
+		hash,
+		signature: Bolt11InvoiceSignature(RecoverableSignature::from_compact(
+			& [
+				0x38u8, 0xec, 0x68, 0x91, 0x34, 0x5e, 0x20, 0x41, 0x45, 0xbe, 0x8a,
+				0x3a, 0x99, 0xde, 0x38, 0xe9, 0x8a, 0x39, 0xd6, 0xa5, 0x69, 0x43,
+				0x4e, 0x18, 0x45, 0xc8, 0xaf, 0x72, 0x05, 0xaf, 0xcf, 0xcc, 0x7f,
+				0x42, 0x5f, 0xcd, 0x14, 0x63, 0xe9, 0x3c, 0x32, 0x88, 0x1e, 0xad,
+				0x0d, 0x6e, 0x35, 0x6d, 0x46, 0x7e, 0xc8, 0xc0, 0x25, 0x53, 0xf9,
+				0xaa, 0xb1, 0x5e, 0x57, 0x38, 0xb1, 0x1f, 0x12, 0x7f
+			],
+			RecoveryId::from_i32(0).unwrap()
+		).unwrap()),
+		};
+
+	assert_eq!(
+		hash_preimage,
+		[108, 110, 98, 99, 0, 0, 48, 212, 13, 3, 208, 80, 80, 80, 80, 80, 80, 144, 209, 0, 67, 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32]
+	);
+	assert_eq!(
+		hash,
+		[179, 238, 131, 75, 134, 121, 79, 11, 95, 166, 105, 177, 151, 125, 17, 5, 63, 122, 194, 196, 216, 130, 118, 180, 188, 246, 83, 232, 147, 210, 29, 10]
+	);
+	assert_eq!(
+		inv.to_string(),
+		"lnbc1qqqrp4qdq0g9q5zs2pg9pyx3qpp5qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpq8rkx3yf5tcsyz3d73gafnh3cax9rn449d9p5uxz9ezhhypd0elx87sjle52x86fux2ypatgddc6k63n7erqz25le42c4u4ecky03ylcqpk8ql4"
+	);
+
+	assert_eq!(
+		<Vec<u8>>::from_base32(
+			&"qqqrp4q".to_string().chars().map(|c| Fe32::from_char(c).unwrap()).collect::<Vec<_>>()[..]
+		)
+		.unwrap(),
+		vec![0, 0, 48, 212]
+	);
+	assert_eq!(
+		<Vec<u8>>::from_base32(
+			&"g9q5zs2pg9pyx3q".to_string().chars().map(|c| Fe32::from_char(c).unwrap()).collect::<Vec<_>>()[..]
+		)
+		.unwrap(),
+		vec![65, 65, 65, 65, 65, 65, 66, 67, 68]
+	);
+	assert_eq!(
+		<Vec<u8>>::from_base32(
+			&"qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpq".to_string().chars().map(|c| Fe32::from_char(c).unwrap()).collect::<Vec<_>>()[..]
+		)
+		.unwrap(),
+		vec![2; 32]
+	);
+	assert_eq!(
+		<Vec<u8>>::from_base32(
+			&"qqqrp4qdq0g9q5zs2pg9pyx3qpp5qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpq".to_string().chars().map(|c| Fe32::from_char(c).unwrap()).collect::<Vec<_>>()[..]
+		)
+		.unwrap(),
+		vec!
+		[0, 0, 48, 212, 13, 3, 208, 80, 80, 80, 80, 80, 80, 144, 209, 0, 67, 64, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32]
+	);
+}
+
