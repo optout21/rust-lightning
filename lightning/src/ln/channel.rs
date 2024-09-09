@@ -1613,7 +1613,7 @@ pub(super) trait InteractivelyFunded<SP: Deref> where SP::Target: SignerProvider
 
 		let funding_ready_for_sig_event = None;
 		if our_funding_satoshis == 0 {
-			signing_session.provide_holder_witnesses(self.context().channel_id, Vec::new());
+			signing_session.provide_holder_witnesses(self.context().channel_id, Vec::new(), signing_session.shared_signature);
 		} else {
 			// TODO(dual_funding): Send event for signing if we've contributed funds.
 		}

@@ -4830,7 +4830,7 @@ where
 			Some(ChannelPhase::Funded(chan)) => {
 				chan.verify_interactive_tx_signatures(&witnesses);
 				if let Some(ref mut signing_session) = chan.interactive_tx_signing_session {
-					if let Some(tx_signatures) = signing_session.provide_holder_witnesses(*channel_id, witnesses) {
+					if let Some(tx_signatures) = signing_session.provide_holder_witnesses(*channel_id, witnesses, signing_session.shared_signature) {
 						peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxSignatures {
 							node_id: *counterparty_node_id,
 							msg: tx_signatures,
