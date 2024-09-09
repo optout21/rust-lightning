@@ -85,7 +85,7 @@ impl FromBase32 for Bolt11InvoiceFeatures {
 	/// and taking the resulting 8-bit values (right to left),
 	/// with the leading 0's skipped.
 	fn from_base32(field_data: &[Fe32]) -> Result<Self, Self::Err> {
-		use crate::FesPaddable;
+		use crate::bech32_util::FesPaddable;
 
 		let mut output = field_data
 			.iter()

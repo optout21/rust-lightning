@@ -65,6 +65,7 @@ use lightning_types::string::UntrustedString;
 mod de;
 mod ser;
 mod tb;
+mod bech32_util;
 
 #[cfg(test)]
 mod test_ser_de;
@@ -1023,93 +1024,6 @@ macro_rules! find_all_extract {
 	};
 }
 
-/// Adaptor to pad a Fe32 iter
-// #[derive(Clone, PartialEq, Eq)]
-pub struct FesPadder<I: Iterator<Item = Fe32>> {
-	end_reached: bool,
-	fe32_count: usize,
-	pad_count: u8,
-	iter: I,
-}
-
-impl<I> FesPadder<I>
-where
-	I: Iterator<Item = Fe32>,
-{
-	// type Item = u8;
-
-	fn new(iter: I) -> Self {
-		Self {
-			end_reached: false,
-			fe32_count: 0,
-			pad_count: 0,
-			iter,
-		}
-	}
-
-	/// Compute how many trailing extra 5-bit elements are needed
-	/// such that no significant bits are dropped if the last byte is dropped.
-	/// Returns 0 (result falls on byte boundary), 1, or 2.
-	fn pad_count_from_fe32_count(fe32_count: usize) -> u8 {
-		let leftover_bits = (fe32_count * 5) % 8;
-		if leftover_bits == 0 {
-			0
-		} else {
-			let needed_bits = 8 - leftover_bits; // 1..7
-			let needed_extra_fe32s = (needed_bits + (5 - 1)) / 5; // 1..2
-			needed_extra_fe32s as u8
-		}
-	}
-
-	fn padded_count(fe32_count: usize) -> usize {
-		fe32_count + Self::pad_count_from_fe32_count(fe32_count) as usize
-	}
-}
-
-impl<I> Iterator for FesPadder<I>
-where
-	I: Iterator<Item = Fe32>,
-{
-	type Item = Fe32;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		if let Some(elem) = self.iter.next() {
-			self.fe32_count += 1;
-			Some(elem)
-		} else {
-			// end reached
-			if !self.end_reached {
-				self.end_reached = true;
-				self.pad_count = Self::pad_count_from_fe32_count(self.fe32_count);
-			}
-			if self.pad_count > 0 {
-				self.pad_count -= 1;
-				Some(Fe32::Q)
-			} else {
-				None
-			}
-		}
-	}
-
-	fn size_hint(&self) -> (usize, Option<usize>) {
-		let (fes_min, fes_max) = self.iter.size_hint();
-		// +1 because we set last_fe with call to `next`.
-		let min = Self::padded_count(fes_min + 1);
-		let max = fes_max.map(|max| Self::padded_count(max));
-		(min, max)
-	}
-}
-
-/// Trait to pad an Fe32 iterator
-pub trait FesPaddable: Sized + Iterator<Item = Fe32> {
-	/// Pad the iterator
-	fn pad_fes(self) -> FesPadder<Self> {
-		FesPadder::new(self)
-	}
-}
-
-impl<I> FesPaddable for I where I: Iterator<Item = Fe32> {}
-
 #[allow(missing_docs)]
 impl RawBolt11Invoice {
 	/// Hash the HRP (as bytes) and signatureless data part (as Fe32 iterator)
@@ -1120,6 +1034,7 @@ impl RawBolt11Invoice {
 
 	/// Hash the HRP as bytes and signatureless data part.
 	fn hash_from_parts(hrp_bytes: &[u8], data_without_signature: &[Fe32]) -> [u8; 32] {
+		use crate::bech32_util::FesPaddable;
 		use crate::bech32::Fe32IterExt;
 
 		let data_part = Vec::from(data_without_signature);
@@ -1140,13 +1055,16 @@ impl RawBolt11Invoice {
 	}
 
 	/// Hash ...
+	#[cfg(test)]
 	fn preimage_from_parts_iter<'s>(hrp_bytes: &[u8], data_without_signature_iter: Box<dyn Iterator<Item = Fe32> + 's>) -> Vec<u8> {
 		let data_part_signature = data_without_signature_iter.collect::<Vec<Fe32>>();
 		Self::preimage_from_parts(hrp_bytes, &data_part_signature[..])
 	}
 
 	/// Hash ...
+	#[cfg(test)]
 	fn preimage_from_parts(hrp_bytes: &[u8], data_without_signature: &[Fe32]) -> Vec<u8> {
+		use crate::bech32_util::FesPaddable;
 		use crate::bech32::Fe32IterExt;
 
 		let data_part = Vec::from(data_without_signature);
@@ -1189,6 +1107,7 @@ impl RawBolt11Invoice {
 	}
 
 	/// Calculate the hash of the encoded `RawBolt11Invoice` which should be signed.
+	#[cfg(test)]
 	pub fn hash_preimage(&self) -> Vec<u8> {
 		use crate::ser::Base32Iterable;
 
