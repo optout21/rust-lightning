@@ -1093,6 +1093,45 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
 
+/// optout FundedAndVariants
+/// Can hold:
+/// - one or more funded channel (confirmed or not), and
+/// - one optional negotiating channel, outbound or inbound
+/// Used is several phases:
+/// - Funded & confirmed V1 -- one channel
+/// - Funded & confirmed V2 -- one channel
+/// - Funded & pending V1 -- one channel
+/// - Funded & pending V2 no RBF -- one channel
+/// - Funded & pending V2 with some RBF -- several channels
+/// - Funded & pending V2 with some RBF, and one RBF negotiating
+///   -- several channels, one channel with negotiating context
+/// TODO: separate out into two different phases (Funded, FundingPending)
+pub struct FundedAndVariants<SP: Deref> where SP::Target: SignerProvider {
+	funded_channels: Vec<Channel<SP>>,
+	unfunded_channel_out: Option<OutboundV2Channel<SP>>,
+	unfunded_channel_in: Option<InboundV2Channel<SP>>,
+}
+
+impl<SP: Deref> FundedAndVariants<SP> where SP::Target: SignerProvider {
+	pub fn new(funded_channel: Channel<SP>) -> Self {
+		Self {
+			funded_channels: vec![funded_channel],
+			unfunded_channel_out: None,
+			unfunded_channel_in: None,
+		}
+	}
+	pub fn set_new_pending_out(&mut self, variant_channel: OutboundV2Channel<SP>) {
+		debug_assert!(self.unfunded_channel_out.is_none());
+		debug_assert!(self.unfunded_channel_in.is_none());
+		self.unfunded_channel_out = Some(variant_channel);
+		println!("QQQ FundedAndVariants.set  counts {} {} {}", self.funded_channels.len(), self.unfunded_channel_out.is_some(), self.unfunded_channel_in.is_some());
+	}
+	/// Return the confirmed or first unconfirmed channel
+	pub fn channel(&self) -> &Channel<SP> { &self.funded_channels[0] }
+	/// Return the confirmed or first unconfirmed channel
+	pub fn channel_mut(&mut self) -> &mut Channel<SP> { &mut self.funded_channels[0] }
+}
+
 /// The `ChannelPhase` enum describes the current phase in life of a lightning channel with each of
 /// its variants containing an appropriate channel struct.
 pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
@@ -1102,7 +1141,9 @@ pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
 	UnfundedOutboundV2(OutboundV2Channel<SP>),
 	#[cfg(any(dual_funding, splicing))]
 	UnfundedInboundV2(InboundV2Channel<SP>),
-	Funded(Channel<SP>),
+	// FundingPending(Channel<SP>),
+	// Funded(Channel<SP>),
+	Funded(FundedAndVariants<SP>),
 }
 
 impl<'a, SP: Deref> ChannelPhase<SP> where
@@ -1111,7 +1152,7 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 {
 	pub fn context(&'a self) -> &'a ChannelContext<SP> {
 		match self {
-			ChannelPhase::Funded(chan) => &chan.context,
+			ChannelPhase::Funded(ch) => &ch.channel().context,
 			ChannelPhase::UnfundedOutboundV1(chan) => &chan.context,
 			ChannelPhase::UnfundedInboundV1(chan) => &chan.context,
 			#[cfg(any(dual_funding, splicing))]
@@ -1123,7 +1164,7 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 
 	pub fn context_mut(&'a mut self) -> &'a mut ChannelContext<SP> {
 		match self {
-			ChannelPhase::Funded(ref mut chan) => &mut chan.context,
+			ChannelPhase::Funded(ref mut ch) => &mut ch.channel_mut().context,
 			ChannelPhase::UnfundedOutboundV1(ref mut chan) => &mut chan.context,
 			ChannelPhase::UnfundedInboundV1(ref mut chan) => &mut chan.context,
 			#[cfg(any(dual_funding, splicing))]
@@ -2258,6 +2299,12 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 	/// Returns true if we've ever received a message from the remote end for this Channel
 	pub fn have_received_message(&self) -> bool {
 		self.channel_state > ChannelState::NegotiatingFunding(NegotiatingFundingFlags::OUR_INIT_SENT)
+	}
+
+	/// Returns true if this channel is fully established and not known to be closing.
+	/// Allowed in any state (including after shutdown)
+	pub fn is_ready(&self) -> bool {
+		matches!(self.channel_state, ChannelState::ChannelReady(_))
 	}
 
 	/// Returns true if this channel is fully established and not known to be closing.
@@ -8523,6 +8570,7 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 		counterparty_node_id: PublicKey, their_features: &InitFeatures, funding_satoshis: u64,
 		funding_inputs: Vec<(TxIn, TransactionU16LenLimited)>, user_id: u128, config: &UserConfig,
 		current_chain_height: u32, outbound_scid_alias: u64, funding_confirmation_target: ConfirmationTarget,
+		opt_channel_id: Option<ChannelId>,
 	) -> Result<OutboundV2Channel<SP>, APIError>
 	where ES::Target: EntropySource,
 	      F::Target: FeeEstimator,
@@ -8531,7 +8579,10 @@ impl<SP: Deref> OutboundV2Channel<SP> where SP::Target: SignerProvider {
 		let holder_signer = signer_provider.derive_channel_signer(funding_satoshis, channel_keys_id);
 		let pubkeys = holder_signer.pubkeys().clone();
 
-		let temporary_channel_id = Some(ChannelId::temporary_v2_from_revocation_basepoint(&pubkeys.revocation_basepoint));
+		let temporary_channel_id = Some(match opt_channel_id {
+			None => ChannelId::temporary_v2_from_revocation_basepoint(&pubkeys.revocation_basepoint),
+			Some(ci) => ci,
+		});
 
 		let holder_selected_channel_reserve_satoshis = get_v2_channel_reserve_satoshis(
 			funding_satoshis, MIN_CHAN_DUST_LIMIT_SATOSHIS);
@@ -8782,6 +8833,98 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 		};
 
 		Ok(chan)
+	}
+
+	/// optout Create new InboundV2Channel context for a new incoming RBF variant
+	pub fn new_for_rbf</*ES: Deref, F: Deref, */L: Deref>(
+		prev_channel: &ChannelContext<SP>,
+		// fee_estimator: &LowerBoundedFeeEstimator<F>, entropy_source: &ES, signer_provider: &SP,
+		counterparty_node_id: PublicKey,
+		// our_supported_features: &ChannelTypeFeatures,
+		// their_features: &InitFeatures,
+		channel_id: ChannelId,
+		// msg: &msgs::OpenChannelV2,
+		// funding_inputs: Vec<(TxIn, TransactionU16LenLimited)>,
+		// user_id: u128, config: &UserConfig,
+		current_chain_height: u32, logger: &L,
+	) -> Result<InboundV2Channel<SP>, ChannelError>
+		where //ES::Target: EntropySource,
+			  //F::Target: FeeEstimator,
+			  L::Target: Logger,
+	{
+		Err(ChannelError::close(format!("TODO")))
+		/*
+		let funding_satoshis = calculate_our_funding_satoshis(
+			false, &funding_inputs, msg.funding_feerate_sat_per_1000_weight,
+			msg.common_fields.dust_limit_satoshis
+		).map_err(|_| ChannelError::Close(
+			(
+				"Failed to accept channel".to_string(),
+				ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
+			)))?;
+		let channel_value_satoshis = funding_satoshis.saturating_add(msg.common_fields.funding_satoshis);
+		let counterparty_selected_channel_reserve_satoshis = get_v2_channel_reserve_satoshis(
+			channel_value_satoshis, msg.common_fields.dust_limit_satoshis);
+		let holder_selected_channel_reserve_satoshis = get_v2_channel_reserve_satoshis(
+			channel_value_satoshis, MIN_CHAN_DUST_LIMIT_SATOSHIS);
+
+		// First check the channel type is known, failing before we do anything else if we don't
+		// support this channel type.
+		if msg.common_fields.channel_type.is_none() {
+			return Err(ChannelError::close(format!("Rejecting V2 channel {} missing channel_type",
+				msg.common_fields.temporary_channel_id)))
+		}
+		let channel_type = channel_type_from_open_channel(&msg.common_fields, their_features, our_supported_features)?;
+
+		let counterparty_pubkeys = ChannelPublicKeys {
+			funding_pubkey: msg.common_fields.funding_pubkey,
+			revocation_basepoint: RevocationBasepoint(msg.common_fields.revocation_basepoint),
+			payment_point: msg.common_fields.payment_basepoint,
+			delayed_payment_basepoint: DelayedPaymentBasepoint(msg.common_fields.delayed_payment_basepoint),
+			htlc_basepoint: HtlcBasepoint(msg.common_fields.htlc_basepoint)
+		};
+
+		let mut context = ChannelContext::new_for_inbound_channel(
+			fee_estimator,
+			entropy_source,
+			signer_provider,
+			counterparty_node_id,
+			their_features,
+			user_id,
+			config,
+			current_chain_height,
+			logger,
+			false,
+
+			funding_satoshis,
+
+			counterparty_pubkeys,
+			channel_type,
+			holder_selected_channel_reserve_satoshis,
+			counterparty_selected_channel_reserve_satoshis,
+			0 /* push_msat not used in dual-funding */,
+			msg.common_fields.clone(),
+		)?;
+		// let channel_id = ChannelId::v2_from_revocation_basepoints(
+		// 	&context.get_holder_pubkeys().revocation_basepoint,
+		// 	&context.get_counterparty_pubkeys().revocation_basepoint);
+		context.channel_id = channel_id;
+
+		let chan = Self {
+			context,
+			unfunded_context: UnfundedChannelContext { unfunded_channel_age_ticks: 0 },
+			dual_funding_context: DualFundingChannelContext {
+				our_funding_satoshis: funding_satoshis,
+				their_funding_satoshis: Some(msg.common_fields.funding_satoshis),
+				funding_tx_locktime: LockTime::from_consensus(msg.locktime),
+				funding_feerate_sat_per_1000_weight: msg.funding_feerate_sat_per_1000_weight,
+				our_funding_inputs: Some(funding_inputs),
+			},
+			interactive_tx_constructor: None,
+		};
+
+		Ok(chan)
+		*/
 	}
 
 	/// Marks an inbound channel as accepted and generates a [`msgs::AcceptChannelV2`] message which

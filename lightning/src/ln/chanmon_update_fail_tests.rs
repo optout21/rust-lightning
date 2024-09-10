@@ -98,7 +98,8 @@ fn test_monitor_and_persister_update_fail() {
 	{
 		let mut node_0_per_peer_lock;
 		let mut node_0_peer_state_lock;
-		if let ChannelPhase::Funded(ref mut channel) = get_channel_ref!(nodes[0], nodes[1], node_0_per_peer_lock, node_0_peer_state_lock, chan.2) {
+		if let ChannelPhase::Funded(ref mut ch) = get_channel_ref!(nodes[0], nodes[1], node_0_per_peer_lock, node_0_peer_state_lock, chan.2) {
+			let channel = ch.channel_mut();
 			if let Ok(Some(update)) = channel.commitment_signed(&updates.commitment_signed, &node_cfgs[0].logger) {
 				// Check that the persister returns InProgress (and will never actually complete)
 				// as the monitor update errors.

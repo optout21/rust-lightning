@@ -52,6 +52,9 @@ mod blinded_payment_tests;
 #[cfg(test)]
 #[allow(unused_mut)]
 mod functional_tests;
+#[cfg(all(dual_funding, test))]
+#[allow(unused_mut)]
+mod functional_tests_dual;
 #[cfg(test)]
 #[allow(unused_mut)]
 mod max_payment_path_len_tests;
