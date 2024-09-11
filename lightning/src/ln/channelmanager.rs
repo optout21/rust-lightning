@@ -7996,18 +7996,115 @@ where
 	}
 
 	#[cfg(any(dual_funding, splicing))]
-	fn internal_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) {
-		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
-			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+	fn internal_handle_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) -> Result<(), MsgHandleErrInternal> {
+		let channel_id = msg.channel_id;
+
+		let per_peer_state = self.per_peer_state.read().unwrap();
+		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
+			.ok_or_else(|| {
+				debug_assert!(false);
+				MsgHandleErrInternal::send_err_msg_no_close(
+					format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id),
+					channel_id)
+			})?;
+		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
+		let peer_state = &mut *peer_state_lock;
+
+		let best_block_height = self.best_block.read().unwrap().height;
+		// if Self::unfunded_channel_count(peer_state, best_block_height) >= MAX_UNFUNDED_CHANS_PER_PEER {
+		// 	return Err(MsgHandleErrInternal::send_err_msg_no_close(
+		// 		format!("Refusing more than {} unfunded channels.", MAX_UNFUNDED_CHANS_PER_PEER),
+		// 		channel_id.clone()));
+		// }
+
+		match peer_state.channel_by_id.entry(channel_id) {
+			hash_map::Entry::Vacant(_) => {
+				return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a channel with id {} with node {}", channel_id, counterparty_node_id), channel_id));
+			},
+			hash_map::Entry::Occupied(mut chan_phase_entry) => {
+				let channel_phase = chan_phase_entry.get_mut();
+				match channel_phase {
+					ChannelPhase::Funded(ref mut ch) => {
+						let mut random_bytes = [0u8; 16];
+						random_bytes.copy_from_slice(&self.entropy_source.get_secure_random_bytes()[..16]);
+						let user_channel_id = u128::from_be_bytes(random_bytes);
+						// let mut channel = match InboundV2Channel::new(&self.fee_estimator, &self.entropy_source,
+						// 	&self.signer_provider, counterparty_node_id.clone(), &self.channel_type_features(),
+						// 	&peer_state.latest_features, &msg2, vec![], user_channel_id, &self.default_configuration,
+						// 	best_block_height, &self.logger)
+						// {
+						// 	Err(e) => {
+						// 		// TODO close
+						// 		return Err(MsgHandleErrInternal::from_chan_no_close(e, msg.common_fields.temporary_channel_id));
+						// 	},
+						// 	Ok(res) => res
+						// };
+
+						let mut channel = match InboundV2Channel::new_for_rbf(
+							&ch.channel().context,
+							&self.fee_estimator, &self.entropy_source, &self.signer_provider,
+							counterparty_node_id.clone(),
+							&self.channel_type_features(), &peer_state.latest_features,
+							channel_id,
+							msg,
+							Vec::new(),
+							&self.default_configuration,
+							best_block_height,
+							&self.logger,
+						) {
+							Ok(ch) => { ch },
+							Err(e) => {
+								println!("QQQ err11339 {}", e);
+								return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Could not create inbound channel"), channel_id));
+							}
+						};
+						debug_assert!(false); // TODO remove
+
+						// TODO!!
+						/*
+						let channel_type = channel.context.get_channel_type();
+						if channel_type.requires_zero_conf() {
+							return Err(MsgHandleErrInternal::send_err_msg_no_close("No zero confirmation channels accepted".to_owned(), msg.common_fields.temporary_channel_id.clone()));
+						}
+						if channel_type.requires_anchors_zero_fee_htlc_tx() {
+							return Err(MsgHandleErrInternal::send_err_msg_no_close("No channels with anchor outputs accepted".to_owned(), msg.common_fields.temporary_channel_id.clone()));
+						}
+		
+						let outbound_scid_alias = self.create_and_insert_outbound_scid_alias();
+						channel.context.set_outbound_scid_alias(outbound_scid_alias);
+		
+						channel.begin_interactive_funding_tx_construction(&self.entropy_source, self.get_our_node_id())
+							.map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
+								"Failed to start interactive transaction construction".to_owned(), msg.common_fields.temporary_channel_id))?;
+
+						// TODO
+						// peer_state.pending_msg_events.push(events::MessageSendEvent::SendAcceptChannelV2 {
+						// 	node_id: counterparty_node_id.clone(),
+						// 	msg: channel.accept_inbound_dual_funded_channel(),
+						// });
+						*/
+
+						ch.set_new_pending_in(channel);
+						// peer_state.channel_by_id.insert(channel.context.channel_id(), ChannelPhase::UnfundedInboundV2(channel));
+						debug_assert!(false);
+					},
+					_ => {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("RBF on a pending inbound V2 channel, id {} with node {}", channel_id, counterparty_node_id), channel_id));
+					},
+				}
+			},
+		}
+		Ok (())
 	}
 
+	/*
 	#[cfg(any(dual_funding, splicing))]
 	fn internal_tx_ack_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAckRbf) {
 		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
 			"Dual-funded channels not supported".to_owned(),
 			 msg.channel_id.clone())), *counterparty_node_id);
 	}
+	*/
 
 	#[cfg(any(dual_funding, splicing))]
 	fn maybe_reset_interactive_tx_state(
@@ -11276,106 +11373,20 @@ where
 		};
 	}
 
-	#[cfg(any(dual_funding, splicing))]
+	// optout handle tx_init_rbf
 	fn handle_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) {
 		#[cfg(any(dual_funding, splicing))]
 		{
-			let channel_id = msg.channel_id;
-	
-			let per_peer_state = self.per_peer_state.read().unwrap();
-			let peer_state_mutex = per_peer_state.get(counterparty_node_id)
-				.unwrap();
-				/*ok_or_else(|| {
-					debug_assert!(false);
-					MsgHandleErrInternal::send_err_msg_no_close(
-						format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id),
-						channel_id.clone())
-				})?;*/
-			let mut peer_state_lock = peer_state_mutex.lock().unwrap();
-			let peer_state = &mut *peer_state_lock;
-
-			let best_block_height = self.best_block.read().unwrap().height;
-			// if Self::unfunded_channel_count(peer_state, best_block_height) >= MAX_UNFUNDED_CHANS_PER_PEER {
-			// 	return Err(MsgHandleErrInternal::send_err_msg_no_close(
-			// 		format!("Refusing more than {} unfunded channels.", MAX_UNFUNDED_CHANS_PER_PEER),
-			// 		channel_id.clone()));
-			// }
-
-			match peer_state.channel_by_id.entry(channel_id) {
-				hash_map::Entry::Vacant(_) => {
-					return;
-					// return Err(APIError::APIMisuseError{ err: format!("Can't find a channel with id {} with node {}", channel_id, counterparty_node_id)});
-				},
-				hash_map::Entry::Occupied(mut chan_phase_entry) => {
-					let channel_phase = chan_phase_entry.get_mut();
-					match channel_phase {
-						ChannelPhase::Funded(ref mut ch) => {
-							let mut random_bytes = [0u8; 16];
-							random_bytes.copy_from_slice(&self.entropy_source.get_secure_random_bytes()[..16]);
-							let user_channel_id = u128::from_be_bytes(random_bytes);
-							// let mut channel = match InboundV2Channel::new(&self.fee_estimator, &self.entropy_source,
-							// 	&self.signer_provider, counterparty_node_id.clone(), &self.channel_type_features(),
-							// 	&peer_state.latest_features, &msg2, vec![], user_channel_id, &self.default_configuration,
-							// 	best_block_height, &self.logger)
-							// {
-							// 	Err(e) => {
-							// 		// TODO close
-							// 		return Err(MsgHandleErrInternal::from_chan_no_close(e, msg.common_fields.temporary_channel_id));
-							// 	},
-							// 	Ok(res) => res
-							// };
-
-							// TODO!!!
-							// let mut channel = match 
-							InboundV2Channel::new_for_rbf(
-								&ch.channel().context,
-								counterparty_node_id.clone(),
-								channel_id,
-								best_block_height,
-								&self.logger,
-							); // {
-								// _ => 
-							//};
-
-							/*
-							let channel_type = channel.context.get_channel_type();
-							if channel_type.requires_zero_conf() {
-								return Err(MsgHandleErrInternal::send_err_msg_no_close("No zero confirmation channels accepted".to_owned(), msg.common_fields.temporary_channel_id.clone()));
-							}
-							if channel_type.requires_anchors_zero_fee_htlc_tx() {
-								return Err(MsgHandleErrInternal::send_err_msg_no_close("No channels with anchor outputs accepted".to_owned(), msg.common_fields.temporary_channel_id.clone()));
-							}
-			
-							let outbound_scid_alias = self.create_and_insert_outbound_scid_alias();
-							channel.context.set_outbound_scid_alias(outbound_scid_alias);
-			
-							channel.begin_interactive_funding_tx_construction(&self.entropy_source, self.get_our_node_id())
-								.map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
-									"Failed to start interactive transaction construction".to_owned(), msg.common_fields.temporary_channel_id))?;
-
-							// TODO
-							// peer_state.pending_msg_events.push(events::MessageSendEvent::SendAcceptChannelV2 {
-							// 	node_id: counterparty_node_id.clone(),
-							// 	msg: channel.accept_inbound_dual_funded_channel(),
-							// });
-
-							ch.add_new_in(channel);
-							// peer_state.channel_by_id.insert(channel.context.channel_id(), ChannelPhase::UnfundedInboundV2(channel));
-							*/
-						},
-						_ => {
-							return;
-							// return Err(APIError::APIMisuseError{ err: format!("RBF on a pending inbound V2 channel, id {} with node {}", channel_id, counterparty_node_id)});
-						},
-					}
-				},
-			}
+			let _persistence_guard = PersistenceNotifierGuard::optionally_notify(self, || {
+				let _ = handle_error!(self, self.internal_handle_tx_init_rbf(counterparty_node_id, msg), *counterparty_node_id);
+				NotifyOption::SkipPersistHandleEvents
+			});
 		};
 		#[cfg(not(any(dual_funding, splicing)))]
 		{
 			let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
 				"Dual-funded channels not supported".to_owned(),
-				 msg.common_fields.temporary_channel_id.clone())), *counterparty_node_id);
+				 msg.channel_id.clone())), *counterparty_node_id);
 		};
 	}
 

@@ -1120,11 +1120,19 @@ impl<SP: Deref> FundedAndVariants<SP> where SP::Target: SignerProvider {
 			unfunded_channel_in: None,
 		}
 	}
+	/// TODO remove
+	fn debug(&self) {
+		println!("QQQ FundedAndVariants.set  counts {} {} {}", self.funded_channels.len(), self.unfunded_channel_out.is_some(), self.unfunded_channel_in.is_some());
+	}
 	pub fn set_new_pending_out(&mut self, variant_channel: OutboundV2Channel<SP>) {
 		debug_assert!(self.unfunded_channel_out.is_none());
-		debug_assert!(self.unfunded_channel_in.is_none());
 		self.unfunded_channel_out = Some(variant_channel);
-		println!("QQQ FundedAndVariants.set  counts {} {} {}", self.funded_channels.len(), self.unfunded_channel_out.is_some(), self.unfunded_channel_in.is_some());
+		self.debug(); // TODO remove
+	}
+	pub fn set_new_pending_in(&mut self, variant_channel: InboundV2Channel<SP>) {
+		debug_assert!(self.unfunded_channel_in.is_none());
+		self.unfunded_channel_in = Some(variant_channel);
+		self.debug(); // TODO remove
 	}
 	/// Return the confirmed or first unconfirmed channel
 	pub fn channel(&self) -> &Channel<SP> { &self.funded_channels[0] }
@@ -8836,80 +8844,84 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 	}
 
 	/// optout Create new InboundV2Channel context for a new incoming RBF variant
-	pub fn new_for_rbf</*ES: Deref, F: Deref, */L: Deref>(
+	pub fn new_for_rbf<ES: Deref, F: Deref, L: Deref>(
 		prev_channel: &ChannelContext<SP>,
-		// fee_estimator: &LowerBoundedFeeEstimator<F>, entropy_source: &ES, signer_provider: &SP,
+		fee_estimator: &LowerBoundedFeeEstimator<F>, entropy_source: &ES, signer_provider: &SP,
 		counterparty_node_id: PublicKey,
-		// our_supported_features: &ChannelTypeFeatures,
-		// their_features: &InitFeatures,
+		our_supported_features: &ChannelTypeFeatures,
+		their_features: &InitFeatures,
 		channel_id: ChannelId,
-		// msg: &msgs::OpenChannelV2,
-		// funding_inputs: Vec<(TxIn, TransactionU16LenLimited)>,
-		// user_id: u128, config: &UserConfig,
+		msg: &msgs::TxInitRbf,
+		funding_inputs: Vec<(TxIn, TransactionU16LenLimited)>,
+		// user_id: u128, 
+		config: &UserConfig,
 		current_chain_height: u32, logger: &L,
 	) -> Result<InboundV2Channel<SP>, ChannelError>
-		where //ES::Target: EntropySource,
-			  //F::Target: FeeEstimator,
+		where ES::Target: EntropySource,
+			  F::Target: FeeEstimator,
 			  L::Target: Logger,
 	{
-		Err(ChannelError::close(format!("TODO")))
-		/*
+		let dust_limit = prev_channel.holder_dust_limit_satoshis;
 		let funding_satoshis = calculate_our_funding_satoshis(
-			false, &funding_inputs, msg.funding_feerate_sat_per_1000_weight,
-			msg.common_fields.dust_limit_satoshis
+			false, &funding_inputs, msg.feerate_sat_per_1000_weight,
+			dust_limit
 		).map_err(|_| ChannelError::Close(
 			(
 				"Failed to accept channel".to_string(),
 				ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
 			)))?;
-		let channel_value_satoshis = funding_satoshis.saturating_add(msg.common_fields.funding_satoshis);
+		let pre_funding_satoshis = prev_channel.channel_value_satoshis;
+		let channel_value_satoshis = funding_satoshis.saturating_add(pre_funding_satoshis);
 		let counterparty_selected_channel_reserve_satoshis = get_v2_channel_reserve_satoshis(
-			channel_value_satoshis, msg.common_fields.dust_limit_satoshis);
+			channel_value_satoshis, dust_limit);
 		let holder_selected_channel_reserve_satoshis = get_v2_channel_reserve_satoshis(
 			channel_value_satoshis, MIN_CHAN_DUST_LIMIT_SATOSHIS);
 
-		// First check the channel type is known, failing before we do anything else if we don't
-		// support this channel type.
-		if msg.common_fields.channel_type.is_none() {
-			return Err(ChannelError::close(format!("Rejecting V2 channel {} missing channel_type",
-				msg.common_fields.temporary_channel_id)))
-		}
-		let channel_type = channel_type_from_open_channel(&msg.common_fields, their_features, our_supported_features)?;
+		// let prev_channel_type = prev_channel.channel_type;
+		// // First check the channel type is known, failing before we do anything else if we don't
+		// // support this channel type.
+		// if msg.common_fields.channel_type.is_none() {
+		// 	return Err(ChannelError::close(format!("Rejecting V2 channel {} missing channel_type",
+		// 		msg.common_fields.temporary_channel_id)))
+		// }
+		// let channel_type = channel_type_from_open_channel(&msg.common_fields, their_features, our_supported_features)?;
 
-		let counterparty_pubkeys = ChannelPublicKeys {
-			funding_pubkey: msg.common_fields.funding_pubkey,
-			revocation_basepoint: RevocationBasepoint(msg.common_fields.revocation_basepoint),
-			payment_point: msg.common_fields.payment_basepoint,
-			delayed_payment_basepoint: DelayedPaymentBasepoint(msg.common_fields.delayed_payment_basepoint),
-			htlc_basepoint: HtlcBasepoint(msg.common_fields.htlc_basepoint)
-		};
+		// let counterparty_pubkeys = ChannelPublicKeys {
+		// 	funding_pubkey: msg.common_fields.funding_pubkey,
+		// 	revocation_basepoint: RevocationBasepoint(msg.common_fields.revocation_basepoint),
+		// 	payment_point: msg.common_fields.payment_basepoint,
+		// 	delayed_payment_basepoint: DelayedPaymentBasepoint(msg.common_fields.delayed_payment_basepoint),
+		// 	htlc_basepoint: HtlcBasepoint(msg.common_fields.htlc_basepoint)
+		// };
 
+		// TODO: should have different clone for RBF for ChannelContext
 		let mut context = ChannelContext::new_for_inbound_channel(
 			fee_estimator,
 			entropy_source,
 			signer_provider,
 			counterparty_node_id,
 			their_features,
-			user_id,
+			prev_channel.user_id,
 			config,
 			current_chain_height,
 			logger,
 			false,
 
-			funding_satoshis,
+			channel_value_satoshis,
 
-			counterparty_pubkeys,
-			channel_type,
+			prev_channel.get_holder_pubkeys().clone(),
+			prev_channel.channel_type,
 			holder_selected_channel_reserve_satoshis,
 			counterparty_selected_channel_reserve_satoshis,
 			0 /* push_msat not used in dual-funding */,
-			msg.common_fields.clone(),
+			msgs::CommonOpenChannelFields::default(),
 		)?;
 		// let channel_id = ChannelId::v2_from_revocation_basepoints(
 		// 	&context.get_holder_pubkeys().revocation_basepoint,
 		// 	&context.get_counterparty_pubkeys().revocation_basepoint);
 		context.channel_id = channel_id;
 
+		/*
 		let chan = Self {
 			context,
 			unfunded_context: UnfundedChannelContext { unfunded_channel_age_ticks: 0 },
@@ -8925,6 +8937,8 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 
 		Ok(chan)
 		*/
+
+		Err(ChannelError::close(format!("TODO new_for_rbf")))
 	}
 
 	/// Marks an inbound channel as accepted and generates a [`msgs::AcceptChannelV2`] message which

@@ -239,13 +239,13 @@ fn test_v2_channel_establishment_with_rbf() {
 
     assert_eq!(nodes[0].node.list_channels().len(), 1);
 
-    // TODO handle_rbf_init
-    // nodes[1].node.handle_open_channel_v2(&nodes[0].node.get_our_node_id(), &open_channel_v2_msg);
+    // handle init_rbf on acceptor side
+    let _res = nodes[1].node.handle_tx_init_rbf(&nodes[0].node.get_our_node_id(), &rbf_msg);
 
     // Confirm 1st tx
     let (channel_ready, _) = create_chan_between_nodes_with_value_confirm(&nodes[0], &nodes[1], &tx_1);
     let (announcement, nodes_0_update, nodes_1_update) = create_chan_between_nodes_with_value_b(&nodes[0], &nodes[1], &channel_ready);
     update_nodes_with_chan_announce(&nodes, 0, 1, &announcement, &nodes_0_update, &nodes_1_update);
 
-    // panic!("OK, panic just for logs"); // TODO remove
+    panic!("OK, panic just for logs"); // TODO remove
 }
