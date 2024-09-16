@@ -1178,6 +1178,23 @@ impl<SP: Deref> FundedAndVariants<SP> where SP::Target: SignerProvider {
 		let n = self.funded_channels.len();
 		&mut self.funded_channels[n - 1]
 	}
+	/// Return all the funded channels
+	pub fn all_funded(&mut self) -> Vec<&mut Channel<SP>> {
+		// self.funded_channels
+		self.funded_channels.iter_mut().collect::<Vec<_>>()
+	}
+	/// Keep only the one confirmed channel, drop the other variants
+	pub fn keep_one_confirmed(&mut self, channel_index: usize) {
+		self.debug();
+		if self.funded_channels.len() > 1 {
+			println!("QQQ FundedAndVariants  keep_one_confirmed  collapsing {} to {}", self.funded_channels.len(), channel_index);
+			debug_assert!(channel_index < self.funded_channels.len());
+			self.funded_channels = vec![self.funded_channels.remove(channel_index)];
+			self.unfunded_channel_out = None;
+			self.unfunded_channel_in = None;
+			self.debug();
+		}
+	}
 }
 
 /// The `ChannelPhase` enum describes the current phase in life of a lightning channel with each of
