@@ -3040,6 +3040,8 @@ where
 		_funding_conf_target: Option<ConfirmationTarget>, push_msat: u64, user_channel_id: u128,
 		temporary_channel_id: Option<ChannelId>, override_config: Option<UserConfig>,
 	) -> Result<ChannelId, APIError> {
+		println!("QQQ create_channel_internal funding_satoshis {}", funding_satoshis);
+
 		if funding_satoshis < 1000 {
 			return Err(APIError::APIMisuseError { err: format!("Channel value must be at least 1000 satoshis. It was {}", funding_satoshis) });
 		}
@@ -3154,6 +3156,7 @@ where
 		channel_id: ChannelId,
 		funding_inputs: Vec<(TxIn, Transaction)>,
 		feerate_sat_per_1000_weight: u32,
+		locktime: u32,
 		user_channel_id: u128, // TODO is it needed?
 		override_config: Option<UserConfig>
 	) -> Result<ChannelId, APIError> {
@@ -3170,22 +3173,40 @@ where
 				let channel_phase = chan_phase_entry.get_mut();
 				// let msg_send_event = match channel_phase {
 				match channel_phase {
-					ChannelPhase::Funded(ref mut channel_phase) => {  // FundingPending(_channel) => {
+					ChannelPhase::Funded(ref mut ch) => {  // FundingPending(_channel) => {
 
 						let funding_inputs = Self::length_limit_holder_input_prev_txs(funding_inputs)?;
 						let funding_satoshis = calculate_our_funding_satoshis(
-						true, &funding_inputs, feerate_sat_per_1000_weight, MIN_CHAN_DUST_LIMIT_SATOSHIS
+							true, &funding_inputs, feerate_sat_per_1000_weight, MIN_CHAN_DUST_LIMIT_SATOSHIS
 						)?;
 
+						println!("QQQ rbf_pending_v2_channel_open funding_satoshis {} feerate {}", funding_satoshis, feerate_sat_per_1000_weight);
 						let outbound_scid_alias = self.create_and_insert_outbound_scid_alias(); // TODO Create new, should we reuse?
 						let their_features = &peer_state.latest_features;
 						let config = if override_config.is_some() { override_config.as_ref().unwrap() } else { &self.default_configuration };
 
-						match OutboundV2Channel::new(&self.fee_estimator, &self.entropy_source, &self.signer_provider, counterparty_node_id,
-							their_features, funding_satoshis, funding_inputs, user_channel_id, config,
-							self.best_block.read().unwrap().height, outbound_scid_alias,
-							ConfirmationTarget::NonAnchorChannelFee, // TODO
-							Some(channel_id),
+						// match OutboundV2Channel::new(&self.fee_estimator, &self.entropy_source, &self.signer_provider, counterparty_node_id,
+						// 	their_features, funding_satoshis, funding_inputs, user_channel_id, config,
+						// 	self.best_block.read().unwrap().height, outbound_scid_alias,
+						// 	ConfirmationTarget::NonAnchorChannelFee, // TODO
+						// 	Some(channel_id),
+						// ) {
+						match OutboundV2Channel::new_for_rbf(
+							&ch.channel().context,
+							// &self.fee_estimator, &self.entropy_source,
+							&self.signer_provider,
+							counterparty_node_id,
+							// their_features, funding_satoshis,
+							channel_id,
+							//funding_satoshis,
+							feerate_sat_per_1000_weight,
+							funding_inputs,
+							locktime,
+							// user_channel_id, config,
+							// self.best_block.read().unwrap().height, outbound_scid_alias,
+							// ConfirmationTarget::NonAnchorChannelFee, // TODO
+							// Some(channel_id),
+							&self.logger,
 						) {
 							Ok(channel) => {
 
@@ -3200,7 +3221,7 @@ where
 								// debug_assert_eq!(new_channel_id.to_string(), channel_id.to_string());
 								if new_channel_id == channel_id {
 									// same channel ID
-									channel_phase.set_new_pending_out(channel);
+									ch.set_new_pending_out(channel);
 								} else {
 									// not the same channel ID (temp)
 									let _res = peer_state.channel_by_id.insert(new_channel_id, ChannelPhase::UnfundedOutboundV2(channel));
@@ -7741,6 +7762,20 @@ where
 					ChannelPhase::UnfundedOutboundV2(ref mut channel) => {
 						channel.tx_add_input(msg).into_msg_send_event(counterparty_node_id)
 					},
+					// possibly RBF
+					ChannelPhase::Funded(ref mut channel) => {
+						if let Some(out_chan) = channel.get_pending_out_mut() {
+							out_chan.tx_add_input(msg).into_msg_send_event(counterparty_node_id)
+						} else {
+							if let Some(in_chan) = channel.get_pending_in_mut() {
+								in_chan.tx_add_input(msg).into_msg_send_event(counterparty_node_id)
+							} else {
+								try_chan_phase_entry!(self, Err(ChannelError::Warn(
+									"Got a tx_add_input message with no interactive transaction construction expected (Funded)"
+									.into())), chan_phase_entry)
+							}
+						}
+					},
 					_ => try_chan_phase_entry!(self, Err(ChannelError::Warn(
 						"Got a tx_add_input message with no interactive transaction construction expected"
 						.into())), chan_phase_entry)
@@ -7775,6 +7810,20 @@ where
 					},
 					ChannelPhase::UnfundedOutboundV2(ref mut channel) => {
 						channel.tx_add_output(msg).into_msg_send_event(counterparty_node_id)
+					},
+					// possibly RBF
+					ChannelPhase::Funded(ref mut channel) => {
+						if let Some(out_chan) = channel.get_pending_out_mut() {
+							out_chan.tx_add_output(msg).into_msg_send_event(counterparty_node_id)
+						} else {
+							if let Some(in_chan) = channel.get_pending_in_mut() {
+								in_chan.tx_add_output(msg).into_msg_send_event(counterparty_node_id)
+							} else {
+								try_chan_phase_entry!(self, Err(ChannelError::Warn(
+									"Got a tx_add_output message with no interactive transaction construction expected (Funded)"
+									.into())), chan_phase_entry)
+							}
+						}
 					},
 					_ => try_chan_phase_entry!(self, Err(ChannelError::Warn(
 						"Got a tx_add_output message with no interactive transaction construction expected or in-progress"
@@ -7881,62 +7930,129 @@ where
 					ChannelPhase::UnfundedOutboundV2(channel) => {
 						channel.tx_complete(msg).into_msg_send_event(counterparty_node_id)
 					},
+					// possibly RBF
+					ChannelPhase::Funded(ref mut channel) => {
+						println!("QQQ internal_tx_complete Funded");
+						channel.debug();
+						if let Some(out_chan) = channel.get_pending_out_mut() {
+							out_chan.tx_complete(msg).into_msg_send_event(counterparty_node_id)
+						} else {
+							if let Some(in_chan) = channel.get_pending_in_mut() {
+								in_chan.tx_complete(msg).into_msg_send_event(counterparty_node_id)
+							} else {
+								try_chan_phase_entry!(self, Err(ChannelError::Warn(
+									"Got a tx_complete message with no interactive transaction construction expected (Funded)"
+									.into())), chan_phase_entry)
+							}
+						}
+					},
 					_ => try_chan_phase_entry!(self, Err(ChannelError::Close(
 						(
 							"Got a tx_complete message with no interactive transaction construction expected or in-progress".into(),
 							ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
 						))), chan_phase_entry)
 				};
+				println!("QQQ internal_tx_complete {} {}", msg_send_event_opt.is_some(), signing_session_opt.is_some());
 				if let Some(msg_send_event) = msg_send_event_opt {
 					peer_state.pending_msg_events.push(msg_send_event);
 				}
 				if let Some(signing_session) = signing_session_opt {
 					let funding_txid = signing_session.unsigned_tx.txid();
-					let (channel_id, channel_phase) = chan_phase_entry.remove_entry();
-					let res = match channel_phase {
-						ChannelPhase::UnfundedOutboundV2(chan) => {
-							chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger).map_err(
-								|(chan, err)| {
-									(ChannelPhase::UnfundedOutboundV2(chan), err)
+					println!("QQQ internal_tx_complete funding_txid {}", funding_txid);
+
+					match channel_phase {
+						ChannelPhase::Funded(ref mut chan) => {
+							// Funded, RBF
+							println!("QQQ internal_tx_complete Funded 2");
+							chan.debug();
+							let res = if let Some(out_chan) = chan.take_pending_out() {
+								out_chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger)
+									.map_err(|(_chan, err)| err)
+							} else {
+								if let Some(in_chan) = chan.take_pending_in() {
+									in_chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger)
+										.map_err(|(_chan, err)| err)
+								} else {
+									return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a tx_complete message with no interactive transaction construction expected or in-progress (2, Funded)"), msg.channel_id));
 								}
-							)
-						},
-						ChannelPhase::UnfundedInboundV2(chan) => {
-							chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger).map_err(
-								|(chan, err)| {
-									(ChannelPhase::UnfundedInboundV2(chan), err)
-								}
-							)
-						},
-						_ => Err((channel_phase, ChannelError::Warn(
-							"Got a tx_complete message with no interactive transaction construction expected or in-progress"
-							.into()))),
-					};
-					match res {
-						Ok((mut channel, commitment_signed, funding_ready_for_sig_event_opt)) => {
-							if let Some(funding_ready_for_sig_event) = funding_ready_for_sig_event_opt {
-								let mut pending_events = self.pending_events.lock().unwrap();
-								pending_events.push_back((funding_ready_for_sig_event, None));
-							}
-							peer_state.pending_msg_events.push(events::MessageSendEvent::UpdateHTLCs {
-								node_id: counterparty_node_id.clone(),
-								updates: CommitmentUpdate {
-									commitment_signed,
-									update_add_htlcs: vec![],
-									update_fulfill_htlcs: vec![],
-									update_fail_htlcs: vec![],
-									update_fail_malformed_htlcs: vec![],
-									update_fee: None,
+							};
+							match res {
+								Ok((mut channel, commitment_signed, funding_ready_for_sig_event_opt)) => {
+									if let Some(funding_ready_for_sig_event) = funding_ready_for_sig_event_opt {
+										let mut pending_events = self.pending_events.lock().unwrap();
+										pending_events.push_back((funding_ready_for_sig_event, None));
+									}
+									peer_state.pending_msg_events.push(events::MessageSendEvent::UpdateHTLCs {
+										node_id: counterparty_node_id.clone(),
+										updates: CommitmentUpdate {
+											commitment_signed,
+											update_add_htlcs: vec![],
+											update_fulfill_htlcs: vec![],
+											update_fail_htlcs: vec![],
+											update_fail_malformed_htlcs: vec![],
+											update_fee: None,
+										},
+									});
+									channel.set_next_funding_txid(&funding_txid);
+									// was Funded, promote
+									chan.add_funded(channel);
 								},
-							});
-							channel.set_next_funding_txid(&funding_txid);
-							peer_state.channel_by_id.insert(channel_id.clone(), ChannelPhase::Funded(FundedAndVariants::new(channel)));
+								Err(err) => {
+									// peer_state.channel_by_id.insert(msg.channel_id, channel_phase);
+									return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("{}", err), msg.channel_id))
+								},
+							}
 						},
-						Err((channel_phase, err)) => {
-							peer_state.channel_by_id.insert(channel_id, channel_phase);
-							return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("{}", err), msg.channel_id))
+						_ => {
+							// Unfunded, initital negotiation
+							let (channel_id, mut channel_phase) = chan_phase_entry.remove_entry();
+							let res = match channel_phase {
+								ChannelPhase::UnfundedOutboundV2(chan) => {
+									chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger).map_err(
+										|(chan, err)| {
+											(ChannelPhase::UnfundedOutboundV2(chan), err)
+										}
+									)
+								},
+								ChannelPhase::UnfundedInboundV2(chan) => {
+									chan.funding_tx_constructed(counterparty_node_id, signing_session, &self.signer_provider, &self.logger).map_err(
+										|(chan, err)| {
+											(ChannelPhase::UnfundedInboundV2(chan), err)
+										}
+									)
+								},
+								_ => Err((channel_phase, ChannelError::Warn(
+									"Got a tx_complete message with no interactive transaction construction expected or in-progress (2)"
+									.into()))),
+							};
+							match res {
+								Ok((mut channel, commitment_signed, funding_ready_for_sig_event_opt)) => {
+									if let Some(funding_ready_for_sig_event) = funding_ready_for_sig_event_opt {
+										let mut pending_events = self.pending_events.lock().unwrap();
+										pending_events.push_back((funding_ready_for_sig_event, None));
+									}
+									peer_state.pending_msg_events.push(events::MessageSendEvent::UpdateHTLCs {
+										node_id: counterparty_node_id.clone(),
+										updates: CommitmentUpdate {
+											commitment_signed,
+											update_add_htlcs: vec![],
+											update_fulfill_htlcs: vec![],
+											update_fail_htlcs: vec![],
+											update_fail_malformed_htlcs: vec![],
+											update_fee: None,
+										},
+									});
+									channel.set_next_funding_txid(&funding_txid);
+									// add as Funded
+									peer_state.channel_by_id.insert(channel_id, ChannelPhase::Funded(FundedAndVariants::new(channel)));
+								},
+								Err((channel_phase, err)) => {
+									peer_state.channel_by_id.insert(channel_id, channel_phase);
+									return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("{}", err), msg.channel_id))
+								},
+							}
 						},
-					}
+					};
 				}
 				Ok(())
 			},
@@ -7995,8 +8111,9 @@ where
 		}
 	}
 
+	// optout tx_init_rbf
 	#[cfg(any(dual_funding, splicing))]
-	fn internal_handle_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) -> Result<(), MsgHandleErrInternal> {
+	fn internal_tx_init_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxInitRbf) -> Result<(), MsgHandleErrInternal> {
 		let channel_id = msg.channel_id;
 
 		let per_peer_state = self.per_peer_state.read().unwrap();
@@ -8042,14 +8159,15 @@ where
 
 						let mut channel = match InboundV2Channel::new_for_rbf(
 							&ch.channel().context,
-							&self.fee_estimator, &self.entropy_source, &self.signer_provider,
+							// &self.fee_estimator, &self.entropy_source,
+							&self.signer_provider,
 							counterparty_node_id.clone(),
-							&self.channel_type_features(), &peer_state.latest_features,
+							// &self.channel_type_features(), &peer_state.latest_features,
 							channel_id,
 							msg,
 							Vec::new(),
-							&self.default_configuration,
-							best_block_height,
+							// &self.default_configuration,
+							// best_block_height,
 							&self.logger,
 						) {
 							Ok(ch) => { ch },
@@ -8058,9 +8176,7 @@ where
 								return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Could not create inbound channel"), channel_id));
 							}
 						};
-						debug_assert!(false); // TODO remove
 
-						// TODO!!
 						/*
 						let channel_type = channel.context.get_channel_type();
 						if channel_type.requires_zero_conf() {
@@ -8072,21 +8188,21 @@ where
 		
 						let outbound_scid_alias = self.create_and_insert_outbound_scid_alias();
 						channel.context.set_outbound_scid_alias(outbound_scid_alias);
-		
-						channel.begin_interactive_funding_tx_construction(&self.entropy_source, self.get_our_node_id())
-							.map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
-								"Failed to start interactive transaction construction".to_owned(), msg.common_fields.temporary_channel_id))?;
-
-						// TODO
-						// peer_state.pending_msg_events.push(events::MessageSendEvent::SendAcceptChannelV2 {
-						// 	node_id: counterparty_node_id.clone(),
-						// 	msg: channel.accept_inbound_dual_funded_channel(),
-						// });
 						*/
 
+						channel.begin_interactive_funding_tx_construction(&self.entropy_source, self.get_our_node_id())
+							.map_err(|_| MsgHandleErrInternal::send_err_msg_no_close(
+								"Failed to start RBF interactive transaction construction".to_owned(), channel_id))?;
+
+						let msg = channel.accept_inbound_dual_funded_rbf_channel();
+
 						ch.set_new_pending_in(channel);
+
+						peer_state.pending_msg_events.push(events::MessageSendEvent::SendTxAckRbf {
+							node_id: counterparty_node_id.clone(), msg,
+						});
+
 						// peer_state.channel_by_id.insert(channel.context.channel_id(), ChannelPhase::UnfundedInboundV2(channel));
-						debug_assert!(false);
 					},
 					_ => {
 						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("RBF on a pending inbound V2 channel, id {} with node {}", channel_id, counterparty_node_id), channel_id));
@@ -8097,14 +8213,67 @@ where
 		Ok (())
 	}
 
-	/*
+	// optout tx_ack_rbf
 	#[cfg(any(dual_funding, splicing))]
-	fn internal_tx_ack_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAckRbf) {
-		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
-			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+	fn internal_tx_ack_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAckRbf) -> Result<(), MsgHandleErrInternal> {
+		let channel_id = msg.channel_id;
+		// Note that the ChannelManager is NOT re-persisted on disk after this, so any changes are
+		// likely to be lost on restart!
+		let per_peer_state = self.per_peer_state.read().unwrap();
+		let peer_state_mutex = per_peer_state.get(counterparty_node_id)
+			.ok_or_else(|| {
+				debug_assert!(false);
+				MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a peer matching the passed counterparty node_id {}", counterparty_node_id), channel_id)
+			})?;
+		let mut peer_state_lock = peer_state_mutex.lock().unwrap();
+		let peer_state = &mut *peer_state_lock;
+
+		let mut entry = peer_state.channel_by_id.entry(channel_id);
+		match entry {
+			hash_map::Entry::Vacant(_) => {
+				return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Can't find a channel with id {} with node {}", channel_id, counterparty_node_id), channel_id));
+			},
+			hash_map::Entry::Occupied(ref mut chan_phase_entry) => {
+				let channel_phase = chan_phase_entry.get_mut();
+				match channel_phase {
+					ChannelPhase::Funded(ref mut ch) => {
+						if let Some(ref mut chan) = ch.get_pending_out_mut() {
+							match chan.ack_rbf(msg) {
+								Ok(_) => {
+									let tx_msg_opt = chan.begin_interactive_funding_tx_construction(&self.entropy_source, self.get_our_node_id())
+										.map_err(|_| MsgHandleErrInternal::from_chan_no_close(
+											ChannelError::Close(
+												(
+													"V2 channel rejected due to sender error".into(),
+													ClosureReason::HolderForceClosed { broadcasted_latest_txn: Some(false) },
+												)), channel_id))?;
+									if let Some(tx_msg) = tx_msg_opt {
+										let msg_send_event = match tx_msg {
+											InteractiveTxMessageSend::TxAddInput(msg) => events::MessageSendEvent::SendTxAddInput {
+												node_id: *counterparty_node_id, msg },
+											InteractiveTxMessageSend::TxAddOutput(msg) => events::MessageSendEvent::SendTxAddOutput {
+												node_id: *counterparty_node_id, msg },
+											InteractiveTxMessageSend::TxComplete(msg) => events::MessageSendEvent::SendTxComplete {
+												node_id: *counterparty_node_id, msg },
+										};
+										peer_state.pending_msg_events.push(msg_send_event);
+									}
+								},
+								Err(_e) => return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Error in ack_rbf"), channel_id))
+							};
+						} else {
+							return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got an unexpected tx_ack_rbf message, no pending RBF. counterparty_node_id {}", counterparty_node_id), channel_id));
+						}
+					},
+					_ => {
+						return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got an unexpected tx_ack_rbf message from peer with counterparty_node_id {}", counterparty_node_id), channel_id));
+					},
+				}
+			},
+		};
+
+		Ok(())
 	}
-	*/
 
 	#[cfg(any(dual_funding, splicing))]
 	fn maybe_reset_interactive_tx_state(
@@ -10372,7 +10541,7 @@ where
 						#[cfg(any(dual_funding, splicing))]
 						ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => true,
 						ChannelPhase::Funded(ch) => {
-							let channel = ch.channel_mut();
+							let channel = ch.channel_mut();  // TODO on all?
 							// let was_ready = channel.context.is_ready();
 
 							let res = f(channel);
@@ -11378,7 +11547,7 @@ where
 		#[cfg(any(dual_funding, splicing))]
 		{
 			let _persistence_guard = PersistenceNotifierGuard::optionally_notify(self, || {
-				let _ = handle_error!(self, self.internal_handle_tx_init_rbf(counterparty_node_id, msg), *counterparty_node_id);
+				let _ = handle_error!(self, self.internal_tx_init_rbf(counterparty_node_id, msg), *counterparty_node_id);
 				NotifyOption::SkipPersistHandleEvents
 			});
 		};
@@ -11390,10 +11559,21 @@ where
 		};
 	}
 
+	// optout handle tx_ack_rbf
 	fn handle_tx_ack_rbf(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAckRbf) {
-		let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
-			"Dual-funded channels not supported".to_owned(),
-			 msg.channel_id.clone())), *counterparty_node_id);
+		#[cfg(any(dual_funding, splicing))]
+		{
+			let _persistence_guard = PersistenceNotifierGuard::optionally_notify(self, || {
+				let _ = handle_error!(self, self.internal_tx_ack_rbf(counterparty_node_id, msg), *counterparty_node_id);
+				NotifyOption::SkipPersistHandleEvents
+			});
+		};
+		#[cfg(not(any(dual_funding, splicing)))]
+		{
+			let _: Result<(), _> = handle_error!(self, Err(MsgHandleErrInternal::send_err_msg_no_close(
+				"Dual-funded channels not supported".to_owned(),
+				 msg.channel_id.clone())), *counterparty_node_id);
+		};
 	}
 
 	fn handle_tx_abort(&self, counterparty_node_id: &PublicKey, msg: &msgs::TxAbort) {
