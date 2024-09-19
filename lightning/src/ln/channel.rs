@@ -2405,9 +2405,9 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 			target_closing_feerate_sats_per_kw: pre_context.target_closing_feerate_sats_per_kw,
 
 			// Reset funding
-			funding_tx_confirmed_in: None,
-			funding_tx_confirmation_height: 0,
-			short_channel_id: None,
+			funding_tx_confirmed_in: pre_context.funding_tx_confirmed_in,
+			funding_tx_confirmation_height: pre_context.funding_tx_confirmation_height,
+			short_channel_id: pre_context.short_channel_id,
 			channel_creation_height: pre_context.channel_creation_height,
 
 			feerate_per_kw: pre_context.feerate_per_kw,
@@ -2470,7 +2470,7 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 			local_initiated_shutdown: pre_context.local_initiated_shutdown.clone(),
 
 			// interactive_tx_constructor: None,
-			next_funding_txid: None,
+			next_funding_txid: pre_context.next_funding_txid,
 		};
 		Ok(context)
 	}
@@ -2478,10 +2478,14 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider  {
 	#[cfg(dual_funding)]
 	fn reset_common_rbf_fields(&mut self, funding_feerate_sat_per_1000_weight: u32)
 	{
+		self.funding_transaction = None;
+		self.funding_tx_confirmed_in = None;
+		self.funding_tx_confirmation_height = 0;
+		self.channel_transaction_parameters.funding_outpoint = None;
+		self.next_funding_txid = None;
 		// reset transaction numbers
 		self.cur_counterparty_commitment_transaction_number = INITIAL_COMMITMENT_NUMBER;
 		self.holder_commitment_point = HolderCommitmentPoint::new(&self.holder_signer, &self.secp_ctx);
-		self.channel_transaction_parameters.funding_outpoint = None;
 		// update feerate
 		self.feerate_per_kw = funding_feerate_sat_per_1000_weight;
 		// reset emitted... fields
