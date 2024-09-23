@@ -45,7 +45,7 @@ use crate::events::{Event, EventHandler, EventsProvider, MessageSendEvent, Messa
 // construct one themselves.
 use crate::ln::inbound_payment;
 use crate::ln::types::{ChannelId, PaymentHash, PaymentPreimage, PaymentSecret};
-use crate::ln::channel::{Channel, ChannelPhase, ChannelContext, ChannelError, ChannelUpdateStatus, FundedAndVariants, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, OutboundV1Channel, InboundV1Channel, WithChannelContext};
+use crate::ln::channel::{Channel, ChannelPhase, ChannelContext, ChannelError, ChannelUpdateStatus, ChannelVariants, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, OutboundV1Channel, InboundV1Channel, WithChannelContext};
 use crate::ln::channel_state::ChannelDetails;
 #[cfg(any(dual_funding, splicing))]
 use crate::ln::channel::{calculate_our_funding_satoshis, InboundV2Channel, MIN_CHAN_DUST_LIMIT_SATOSHIS, OutboundV2Channel, InteractivelyFunded as _};
@@ -7661,7 +7661,7 @@ where
 								});
 							}
 
-							if let ChannelPhase::Funded(chan) = e.insert(ChannelPhase::Funded(FundedAndVariants::new(chan))) {
+							if let ChannelPhase::Funded(chan) = e.insert(ChannelPhase::Funded(ChannelVariants::new(chan))) {
 								handle_new_monitor_update!(self, persist_state, peer_state_lock, peer_state,
 									per_peer_state, chan.channel_mut(), INITIAL_MONITOR);
 							} else {
@@ -7708,7 +7708,7 @@ where
 								// We really should be able to insert here without doing a second
 								// lookup, but sadly rust stdlib doesn't currently allow keeping
 								// the original Entry around with the value removed.
-								let mut chan = peer_state.channel_by_id.entry(msg.channel_id).or_insert(ChannelPhase::Funded(FundedAndVariants::new(chan)));
+								let mut chan = peer_state.channel_by_id.entry(msg.channel_id).or_insert(ChannelPhase::Funded(ChannelVariants::new(chan)));
 								if let ChannelPhase::Funded(ref mut chan) = &mut chan {
 									handle_new_monitor_update!(self, persist_status, peer_state_lock, peer_state, per_peer_state, chan.channel_mut(), INITIAL_MONITOR);
 								} else { unreachable!(); }
@@ -7720,7 +7720,7 @@ where
 								// found an (unreachable) panic when the monitor update contained
 								// within `shutdown_finish` was applied.
 								chan.unset_funding_info(msg.channel_id);
-								return Err(convert_chan_phase_err!(self, e, &mut ChannelPhase::Funded(FundedAndVariants::new(chan)), &msg.channel_id).1);
+								return Err(convert_chan_phase_err!(self, e, &mut ChannelPhase::Funded(ChannelVariants::new(chan)), &msg.channel_id).1);
 							}
 						},
 						Err((chan, e)) => {
@@ -8044,7 +8044,7 @@ where
 									});
 									channel.set_next_funding_txid(&funding_txid);
 									// add as Funded
-									peer_state.channel_by_id.insert(channel_id, ChannelPhase::Funded(FundedAndVariants::new(channel)));
+									peer_state.channel_by_id.insert(channel_id, ChannelPhase::Funded(ChannelVariants::new(channel)));
 								},
 								Err((channel_phase, err)) => {
 									peer_state.channel_by_id.insert(channel_id, channel_phase);
@@ -8345,7 +8345,7 @@ where
 			hash_map::Entry::Occupied(mut chan_phase_entry) => {
 				if let ChannelPhase::Funded(ch) = chan_phase_entry.get_mut() {
 					// handle on all channels
-					// TODO move to channel, FundedAndVariants
+					// TODO move to channel, ChannelVariants
 					// let chan = ch.channel_mut();
 					for ch_idx in 0..ch.all_funded().len() {
 						let chan = &mut ch.all_funded()[ch_idx];
@@ -10548,7 +10548,7 @@ where
 						ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => true,
 						ChannelPhase::Funded(ch) => {
 							// we need to iterate on all channel variants
-							// TODO move this to channel, to FundedAndVariants, move the collapsing logic there
+							// TODO move this to channel, to ChannelVariants, move the collapsing logic there
 							// let channel = ch.channel_mut();
 							let mut channel_ready_index = None;
 							// for (ch_idx, _c) in ch.all_funded().iter().enumerate() {
@@ -12745,11 +12745,11 @@ where
 					match funded_peer_channels.entry(channel.context.get_counterparty_node_id()) {
 						hash_map::Entry::Occupied(mut entry) => {
 							let by_id_map = entry.get_mut();
-							by_id_map.insert(channel.context.channel_id(), ChannelPhase::Funded(FundedAndVariants::new(channel)));
+							by_id_map.insert(channel.context.channel_id(), ChannelPhase::Funded(ChannelVariants::new(channel)));
 						},
 						hash_map::Entry::Vacant(entry) => {
 							let mut by_id_map = new_hash_map();
-							by_id_map.insert(channel.context.channel_id(), ChannelPhase::Funded(FundedAndVariants::new(channel)));
+							by_id_map.insert(channel.context.channel_id(), ChannelPhase::Funded(ChannelVariants::new(channel)));
 							entry.insert(by_id_map);
 						}
 					}

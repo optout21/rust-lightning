@@ -1099,7 +1099,7 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
 
-/// optout FundedAndVariants
+/// optout ChannelVariants
 /// Can hold:
 /// - one or more funded channel (confirmed or not), and
 /// - one optional negotiating channel, outbound or inbound
@@ -1112,13 +1112,13 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 /// - Funded & pending V2 with some RBF, and one RBF negotiating
 ///   -- several channels, one channel with negotiating context
 /// TODO: separate out into two different phases (Funded, FundingPending)
-pub struct FundedAndVariants<SP: Deref> where SP::Target: SignerProvider {
+pub struct ChannelVariants<SP: Deref> where SP::Target: SignerProvider {
 	funded_channels: Vec<Channel<SP>>,
 	unfunded_channel_out: Option<OutboundV2Channel<SP>>,
 	unfunded_channel_in: Option<InboundV2Channel<SP>>,
 }
 
-impl<SP: Deref> FundedAndVariants<SP> where SP::Target: SignerProvider {
+impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 	pub fn new(funded_channel: Channel<SP>) -> Self {
 		Self {
 			funded_channels: vec![funded_channel],
@@ -1128,7 +1128,7 @@ impl<SP: Deref> FundedAndVariants<SP> where SP::Target: SignerProvider {
 	}
 	/// TODO remove
 	pub fn debug(&self) {
-		println!("QQQ FundedAndVariants.set  counts {} {} {}", self.funded_channels.len(), self.unfunded_channel_out.is_some(), self.unfunded_channel_in.is_some());
+		println!("QQQ ChannelVariants.set  counts {} {} {}", self.funded_channels.len(), self.unfunded_channel_out.is_some(), self.unfunded_channel_in.is_some());
 	}
 	/// Add new funded, close any unfunded
 	pub fn add_funded(&mut self, funded_channel: Channel<SP>) {
@@ -1187,7 +1187,7 @@ impl<SP: Deref> FundedAndVariants<SP> where SP::Target: SignerProvider {
 	pub fn keep_one_confirmed(&mut self, channel_index: usize) {
 		self.debug();
 		if self.funded_channels.len() > 1 {
-			println!("QQQ FundedAndVariants  keep_one_confirmed  collapsing {} to {}", self.funded_channels.len(), channel_index);
+			println!("QQQ ChannelVariants  keep_one_confirmed  collapsing {} to {}", self.funded_channels.len(), channel_index);
 			debug_assert!(channel_index < self.funded_channels.len());
 			self.funded_channels = vec![self.funded_channels.remove(channel_index)];
 			self.unfunded_channel_out = None;
@@ -1208,7 +1208,7 @@ pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
 	UnfundedInboundV2(InboundV2Channel<SP>),
 	// FundingPending(Channel<SP>),
 	// Funded(Channel<SP>),
-	Funded(FundedAndVariants<SP>),
+	Funded(ChannelVariants<SP>),
 }
 
 impl<'a, SP: Deref> ChannelPhase<SP> where
