@@ -1099,6 +1099,15 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
 
+/// An enum for an unconfirmed V2 channel: negotiating or funded but unconfirmed
+/// Naming TBD ChannelPhase1 UnconfirmedV2
+#[cfg(any(dual_funding, splicing))]
+pub enum UnconfirmedV2<SP: Deref> where SP::Target: SignerProvider {
+	UnfundedOutboundV2(OutboundV2Channel<SP>),
+	UnfundedInboundV2(InboundV2Channel<SP>),
+	// Funded(Channel<SP>),
+}
+
 /// optout ChannelVariants
 /// Can hold:
 /// - one or more funded channel (confirmed or not), and
@@ -1112,66 +1121,95 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 /// - Funded & pending V2 with some RBF, and one RBF negotiating
 ///   -- several channels, one channel with negotiating context
 /// TODO: separate out into two different phases (Funded, FundingPending)
+// #[cfg(any(dual_funding, splicing))]
 pub struct ChannelVariants<SP: Deref> where SP::Target: SignerProvider {
 	funded_channels: Vec<Channel<SP>>,
-	unfunded_channel_out: Option<OutboundV2Channel<SP>>,
-	unfunded_channel_in: Option<InboundV2Channel<SP>>,
+	unfunded_channel: Option<UnconfirmedV2<SP>>,
 }
 
+// #[cfg(any(dual_funding, splicing))]
 impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 	pub fn new(funded_channel: Channel<SP>) -> Self {
 		Self {
 			funded_channels: vec![funded_channel],
-			unfunded_channel_out: None,
-			unfunded_channel_in: None,
+			unfunded_channel: None,
 		}
 	}
 	/// TODO remove
 	pub fn debug(&self) {
-		println!("QQQ ChannelVariants.set  counts {} {} {}", self.funded_channels.len(), self.unfunded_channel_out.is_some(), self.unfunded_channel_in.is_some());
+		println!("QQQ ChannelVariants.set  counts {} {}", self.funded_channels.len(), self.unfunded_channel.is_some());
 	}
 	/// Add new funded, close any unfunded
 	pub fn add_funded(&mut self, funded_channel: Channel<SP>) {
 		self.funded_channels.push(funded_channel);
-		self.unfunded_channel_out = None;
-		self.unfunded_channel_in = None;
+		self.unfunded_channel = None;
 	}
 	pub fn set_new_pending_out(&mut self, variant_channel: OutboundV2Channel<SP>) {
-		debug_assert!(self.unfunded_channel_out.is_none());
-		self.unfunded_channel_out = Some(variant_channel);
+		debug_assert!(self.unfunded_channel.is_none());
+		self.unfunded_channel = Some(UnconfirmedV2::UnfundedOutboundV2(variant_channel));
 		self.debug(); // TODO remove
 	}
 	pub fn get_pending_out_mut(&mut self) -> Option<&mut OutboundV2Channel<SP>> {
-		match self.unfunded_channel_out {
+		match self.unfunded_channel {
 			None => None,
-			Some(ref mut ch) => Some(ch),
+			Some(ref mut ch) => {
+				match ch {
+					UnconfirmedV2::UnfundedOutboundV2(ref mut ch) => Some(ch),
+					_ => None,
+				}
+			},
 		}
 	}
 	pub fn take_pending_out(&mut self) -> Option<OutboundV2Channel<SP>> {
-		self.unfunded_channel_out.take()
+		if self.get_pending_out_mut().is_none() { return None; }
+		let v = self.unfunded_channel.take();
+		match v {
+			None => panic!("None"),
+			Some(ch) => {
+				match ch {
+					UnconfirmedV2::UnfundedOutboundV2(ch) => Some(ch),
+					_ => panic!("Not out"),
+				}
+			},
+		}
 	}
 	pub fn set_new_pending_in(&mut self, variant_channel: InboundV2Channel<SP>) {
-		debug_assert!(self.unfunded_channel_in.is_none());
-		self.unfunded_channel_in = Some(variant_channel);
+		debug_assert!(self.unfunded_channel.is_none());
+		self.unfunded_channel = Some(UnconfirmedV2::UnfundedInboundV2(variant_channel));
 		self.debug(); // TODO remove
 	}
 	pub fn get_pending_in_mut(&mut self) -> Option<&mut InboundV2Channel<SP>> {
-		match self.unfunded_channel_in {
+		match self.unfunded_channel {
 			None => None,
-			Some(ref mut ch) => Some(ch),
+			Some(ref mut ch) => {
+				match ch {
+					UnconfirmedV2::UnfundedInboundV2(ref mut ch) => Some(ch),
+					_ => None,
+				}
+			},
 		}
 	}
 	pub fn take_pending_in(&mut self) -> Option<InboundV2Channel<SP>> {
-		self.unfunded_channel_in.take()
+		if self.get_pending_in_mut().is_none() { return None; }
+		let v = self.unfunded_channel.take();
+		match v {
+			None => panic!("None"),
+			Some(ch) => {
+				match ch {
+					UnconfirmedV2::UnfundedInboundV2(ch) => Some(ch),
+					_ => panic!("Not in"),
+				}
+			},
+		}
 	}
-	/// Return the confirmed or first unconfirmed channel
+	/// Return the last funded (unconfirmed) channel
 	pub fn channel(&self) -> &Channel<SP> {
 		// self.debug();
 		debug_assert!(self.funded_channels.len() > 0);
 		let n = self.funded_channels.len();
 		&self.funded_channels[n - 1]
 	}
-	/// Return the last funded channel
+	/// Return the last funded (unconfirmed) channel
 	pub fn channel_mut(&mut self) -> &mut Channel<SP> {
 		self.debug();
 		debug_assert!(self.funded_channels.len() > 0);
@@ -1180,18 +1218,17 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 	}
 	/// Return all the funded channels
 	pub fn all_funded(&mut self) -> Vec<&mut Channel<SP>> {
-		// self.funded_channels
 		self.funded_channels.iter_mut().collect::<Vec<_>>()
 	}
 	/// Keep only the one confirmed channel, drop the other variants
+	// This is to be relaced by going to Confirmed phase with one channel
 	pub fn keep_one_confirmed(&mut self, channel_index: usize) {
 		self.debug();
 		if self.funded_channels.len() > 1 {
 			println!("QQQ ChannelVariants  keep_one_confirmed  collapsing {} to {}", self.funded_channels.len(), channel_index);
 			debug_assert!(channel_index < self.funded_channels.len());
 			self.funded_channels = vec![self.funded_channels.remove(channel_index)];
-			self.unfunded_channel_out = None;
-			self.unfunded_channel_in = None;
+			self.unfunded_channel = None;
 			self.debug();
 		}
 	}
