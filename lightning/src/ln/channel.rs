@@ -1099,14 +1099,24 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
 
+/// An enum for a negotiating V2 channel
+/// Note: OutboundV2Channel and InboundV2Channel should be merged into one struct, with an `is_outbound` flag.
+/// This is the placeholder for it here.
+#[cfg(any(dual_funding, splicing))]
+pub(crate) enum V2Channel<SP: Deref> where SP::Target: SignerProvider {
+	UnfundedOutboundV2(OutboundV2Channel<SP>),
+	UnfundedInboundV2(InboundV2Channel<SP>),
+}
+
+/*
 /// An enum for an unconfirmed V2 channel: negotiating or funded but unconfirmed
 /// Naming TBD ChannelPhase1 UnconfirmedV2
 #[cfg(any(dual_funding, splicing))]
-pub enum UnconfirmedV2<SP: Deref> where SP::Target: SignerProvider {
-	UnfundedOutboundV2(OutboundV2Channel<SP>),
-	UnfundedInboundV2(InboundV2Channel<SP>),
-	// Funded(Channel<SP>),
+pub(crate) enum UnconfirmedV2<SP: Deref> where SP::Target: SignerProvider {
+	Negotiating(V2Channel<SP>),
+	Funded(Channel<SP>),
 }
+*/
 
 /// optout ChannelVariants
 /// Can hold:
@@ -1124,10 +1134,10 @@ pub enum UnconfirmedV2<SP: Deref> where SP::Target: SignerProvider {
 /// - Confirmed(Channel) and
 /// - NegotiatingV2(ChannelVariants)
 // #[cfg(any(dual_funding, splicing))]
-pub struct ChannelVariants<SP: Deref> where SP::Target: SignerProvider {
+pub(crate) struct ChannelVariants<SP: Deref> where SP::Target: SignerProvider {
 	funded_channels: Vec<Channel<SP>>,
 	#[cfg(any(dual_funding, splicing))]
-	unfunded_channel: Option<UnconfirmedV2<SP>>,
+	unfunded_channel: Option<V2Channel<SP>>,
 }
 
 // #[cfg(any(dual_funding, splicing))]
@@ -1178,7 +1188,7 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 	#[cfg(any(dual_funding, splicing))]
 	pub fn set_new_pending_out(&mut self, variant_channel: OutboundV2Channel<SP>) {
 		debug_assert!(self.unfunded_channel.is_none());
-		self.unfunded_channel = Some(UnconfirmedV2::UnfundedOutboundV2(variant_channel));
+		self.unfunded_channel = Some(V2Channel::UnfundedOutboundV2(variant_channel));
 		self.debug(); // TODO remove
 	}
 
@@ -1188,7 +1198,7 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 			None => None,
 			Some(ref mut ch) => {
 				match ch {
-					UnconfirmedV2::UnfundedOutboundV2(ref mut ch) => Some(ch),
+					V2Channel::UnfundedOutboundV2(ref mut ch) => Some(ch),
 					_ => None,
 				}
 			},
@@ -1203,7 +1213,7 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 			None => panic!("None"),
 			Some(ch) => {
 				match ch {
-					UnconfirmedV2::UnfundedOutboundV2(ch) => Some(ch),
+					V2Channel::UnfundedOutboundV2(ch) => Some(ch),
 					_ => panic!("Not out"),
 				}
 			},
@@ -1213,7 +1223,7 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 	#[cfg(any(dual_funding, splicing))]
 	pub fn set_new_pending_in(&mut self, variant_channel: InboundV2Channel<SP>) {
 		debug_assert!(self.unfunded_channel.is_none());
-		self.unfunded_channel = Some(UnconfirmedV2::UnfundedInboundV2(variant_channel));
+		self.unfunded_channel = Some(V2Channel::UnfundedInboundV2(variant_channel));
 		self.debug(); // TODO remove
 	}
 
@@ -1223,7 +1233,7 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 			None => None,
 			Some(ref mut ch) => {
 				match ch {
-					UnconfirmedV2::UnfundedInboundV2(ref mut ch) => Some(ch),
+					V2Channel::UnfundedInboundV2(ref mut ch) => Some(ch),
 					_ => None,
 				}
 			},
@@ -1238,7 +1248,7 @@ impl<SP: Deref> ChannelVariants<SP> where SP::Target: SignerProvider {
 			None => panic!("None"),
 			Some(ch) => {
 				match ch {
-					UnconfirmedV2::UnfundedInboundV2(ch) => Some(ch),
+					V2Channel::UnfundedInboundV2(ch) => Some(ch),
 					_ => panic!("Not in"),
 				}
 			},
