@@ -1122,8 +1122,8 @@ pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
 	UnfundedInboundV1(InboundV1Channel<SP>),
 	#[cfg(any(dual_funding, splicing))]
 	UnfundedOutboundV2(OutboundV2Channel<SP>),
-	#[cfg(any(dual_funding, splicing))]
-	UnfundedInboundV2(InboundV2Channel<SP>),
+	// #[cfg(any(dual_funding, splicing))]
+	// UnfundedInboundV2(InboundV2Channel<SP>),
 	Funded(Channel<SP>),
 }
 
@@ -1138,8 +1138,8 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			ChannelPhase::UnfundedInboundV1(chan) => &chan.context,
 			#[cfg(any(dual_funding, splicing))]
 			ChannelPhase::UnfundedOutboundV2(chan) => &chan.context,
-			#[cfg(any(dual_funding, splicing))]
-			ChannelPhase::UnfundedInboundV2(chan) => &chan.context,
+			// #[cfg(any(dual_funding, splicing))]
+			// ChannelPhase::UnfundedInboundV2(chan) => &chan.context,
 		}
 	}
 
@@ -1150,8 +1150,8 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			ChannelPhase::UnfundedInboundV1(ref mut chan) => &mut chan.context,
 			#[cfg(any(dual_funding, splicing))]
 			ChannelPhase::UnfundedOutboundV2(ref mut chan) => &mut chan.context,
-			#[cfg(any(dual_funding, splicing))]
-			ChannelPhase::UnfundedInboundV2(ref mut chan) => &mut chan.context,
+			// #[cfg(any(dual_funding, splicing))]
+			// ChannelPhase::UnfundedInboundV2(ref mut chan) => &mut chan.context,
 		}
 	}
 }
@@ -3701,6 +3701,9 @@ pub(super) struct DualFundingChannelContext {
 // Counterparty designates channel data owned by the another channel participant entity.
 pub(super) struct Channel<SP: Deref> where SP::Target: SignerProvider {
 	pub context: ChannelContext<SP>,
+	pub unfunded_context: Option<UnfundedChannelContext>,  // TODO
+	#[cfg(any(dual_funding, splicing))]
+	pub dual_funding_context: Option<DualFundingChannelContext>,
 	#[cfg(any(dual_funding, splicing))]
 	pub dual_funding_channel_context: Option<DualFundingChannelContext>,
 }
@@ -7934,6 +7937,9 @@ impl<SP: Deref> OutboundV1Channel<SP> where SP::Target: SignerProvider {
 
 		let mut channel = Channel {
 			context: self.context,
+			unfunded_context: None,
+			#[cfg(any(dual_funding, splicing))]
+			dual_funding_context: None,
 			#[cfg(any(dual_funding, splicing))]
 			dual_funding_channel_context: None,
 		};
@@ -8232,6 +8238,9 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 		// `ChannelMonitor`.
 		let mut channel = Channel {
 			context: self.context,
+			unfunded_context: None,
+			#[cfg(any(dual_funding, splicing))]
+			dual_funding_context: None,
 			#[cfg(any(dual_funding, splicing))]
 			dual_funding_channel_context: None,
 		};
@@ -9589,6 +9598,9 @@ impl<'a, 'b, 'c, ES: Deref, SP: Deref> ReadableArgs<(&'a ES, &'b SP, u32, &'c Ch
 				blocked_monitor_updates: blocked_monitor_updates.unwrap(),
 				is_manual_broadcast: is_manual_broadcast.unwrap_or(false),
 			},
+			unfunded_context: None,
+			#[cfg(any(dual_funding, splicing))]
+			dual_funding_context: None,
 			#[cfg(any(dual_funding, splicing))]
 			dual_funding_channel_context: None,
 		})

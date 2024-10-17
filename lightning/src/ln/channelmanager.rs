@@ -1184,8 +1184,8 @@ impl <SP: Deref> PeerState<SP> where SP::Target: SignerProvider {
 				ChannelPhase::UnfundedInboundV1(_) => false,
 				#[cfg(any(dual_funding, splicing))]
 				ChannelPhase::UnfundedOutboundV2(_) => true,
-				#[cfg(any(dual_funding, splicing))]
-				ChannelPhase::UnfundedInboundV2(_) => false,
+				// #[cfg(any(dual_funding, splicing))]
+				// ChannelPhase::UnfundedInboundV2(_) => false,
 			}
 		)
 			&& self.monitor_update_blocked_actions.is_empty()
@@ -2817,10 +2817,10 @@ macro_rules! convert_chan_phase_err {
 			ChannelPhase::UnfundedOutboundV2(channel) => {
 				convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
 			},
-			#[cfg(any(dual_funding, splicing))]
-			ChannelPhase::UnfundedInboundV2(channel) => {
-				convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
-			},
+			// #[cfg(any(dual_funding, splicing))]
+			// ChannelPhase::UnfundedInboundV2(channel) => {
+			// 	convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
+			// },
 		}
 	};
 }
@@ -3738,7 +3738,8 @@ where
 					},
 					// TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
 					#[cfg(any(dual_funding, splicing))]
-					ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => {
+					// ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => {
+					ChannelPhase::UnfundedOutboundV2(_) => {
 						self.finish_close_channel(chan_phase.context_mut().force_shutdown(false, closure_reason));
 						// Unfunded channel has no update
 						(None, chan_phase.context().get_counterparty_node_id())
@@ -6261,11 +6262,11 @@ where
 								process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
 									pending_msg_events, counterparty_node_id)
 							},
-							#[cfg(any(dual_funding, splicing))]
-							ChannelPhase::UnfundedInboundV2(chan) => {
-								process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
-									pending_msg_events, counterparty_node_id)
-							},
+							// #[cfg(any(dual_funding, splicing))]
+							// ChannelPhase::UnfundedInboundV2(chan) => {
+							// 	process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
+							// 		pending_msg_events, counterparty_node_id)
+							// },
 							#[cfg(any(dual_funding, splicing))]
 							ChannelPhase::UnfundedOutboundV2(chan) => {
 								process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
@@ -7582,16 +7583,16 @@ where
 						num_unfunded_channels += 1;
 					}
 				},
-				// TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
-				#[cfg(any(dual_funding, splicing))]
-				ChannelPhase::UnfundedInboundV2(chan) => {
-					// Only inbound V2 channels that are not 0conf and that we do not contribute to will be
-					// included in the unfunded count.
-					if chan.context.minimum_depth().unwrap_or(1) != 0 &&
-						chan.dual_funding_context.our_funding_satoshis == 0 {
-						num_unfunded_channels += 1;
-					}
-				},
+				// // TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
+				// #[cfg(any(dual_funding, splicing))]
+				// ChannelPhase::UnfundedInboundV2(chan) => {
+				// 	// Only inbound V2 channels that are not 0conf and that we do not contribute to will be
+				// 	// included in the unfunded count.
+				// 	if chan.context.minimum_depth().unwrap_or(1) != 0 &&
+				// 		chan.dual_funding_context.our_funding_satoshis == 0 {
+				// 		num_unfunded_channels += 1;
+				// 	}
+				// },
 				ChannelPhase::UnfundedOutboundV1(_) => {
 					// Outbound channels don't contribute to the unfunded count in the DoS context.
 					continue;
@@ -8029,7 +8030,8 @@ where
 					},
 					// TODO(dual_funding): Combine this match arm with above.
 					#[cfg(any(dual_funding, splicing))]
-					ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
+					// ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
+					ChannelPhase::UnfundedOutboundV2(_) => {
 						let context = phase.context_mut();
 						log_error!(self.logger, "Immediately closing unfunded channel {} as peer asked to cooperatively shut it down (which is unnecessary)", &msg.channel_id);
 						let mut chan = remove_channel_phase!(self, chan_phase_entry);
@@ -10186,7 +10188,8 @@ where
 						ChannelPhase::UnfundedOutboundV1(_) | ChannelPhase::UnfundedInboundV1(_) => true,
 						// TODO(dual_funding): Combine this match arm with above.
 						#[cfg(any(dual_funding, splicing))]
-						ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => true,
+						// ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => true,
+						ChannelPhase::UnfundedOutboundV2(_) => true,
 						ChannelPhase::Funded(channel) => {
 							let res = f(channel);
 							if let Ok((channel_ready_opt, mut timed_out_pending_htlcs, announcement_sigs)) = res {
@@ -10672,10 +10675,10 @@ where
 						ChannelPhase::UnfundedOutboundV2(chan) => {
 							&mut chan.context
 						},
-						#[cfg(any(dual_funding, splicing))]
-						ChannelPhase::UnfundedInboundV2(chan) => {
-							&mut chan.context
-						},
+						// #[cfg(any(dual_funding, splicing))]
+						// ChannelPhase::UnfundedInboundV2(chan) => {
+						// 	&mut chan.context
+						// },
 					};
 					// Clean up for removal.
 					update_maps_on_chan_removal!(self, &context);
@@ -10850,13 +10853,13 @@ where
 						}
 
 						// TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
-						#[cfg(any(dual_funding, splicing))]
-						ChannelPhase::UnfundedInboundV2(channel) => {
-							// Since unfunded inbound channel maps are cleared upon disconnecting a peer,
-							// they are not persisted and won't be recovered after a crash.
-							// Therefore, they shouldn't exist at this point.
-							debug_assert!(false);
-						},
+						// #[cfg(any(dual_funding, splicing))]
+						// ChannelPhase::UnfundedInboundV2(channel) => {
+						// 	// Since unfunded inbound channel maps are cleared upon disconnecting a peer,
+						// 	// they are not persisted and won't be recovered after a crash.
+						// 	// Therefore, they shouldn't exist at this point.
+						// 	debug_assert!(false);
+						// },
 					}
 				}
 			}
@@ -10964,8 +10967,8 @@ where
 						}
 					},
 					None | Some(ChannelPhase::UnfundedInboundV1(_) | ChannelPhase::Funded(_)) => (),
-					#[cfg(any(dual_funding, splicing))]
-					Some(ChannelPhase::UnfundedInboundV2(_)) => (),
+					// #[cfg(any(dual_funding, splicing))]
+					// Some(ChannelPhase::UnfundedInboundV2(_)) => (),
 				}
 			}
 
