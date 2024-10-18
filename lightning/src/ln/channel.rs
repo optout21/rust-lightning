@@ -1120,10 +1120,12 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
 	UnfundedOutboundV1(OutboundV1Channel<SP>),
 	UnfundedInboundV1(InboundV1Channel<SP>),
+	/*
 	#[cfg(any(dual_funding, splicing))]
 	UnfundedOutboundV2(OutboundV2Channel<SP>),
-	// #[cfg(any(dual_funding, splicing))]
-	// UnfundedInboundV2(InboundV2Channel<SP>),
+	#[cfg(any(dual_funding, splicing))]
+	UnfundedInboundV2(InboundV2Channel<SP>),
+	*/
 	Funded(Channel<SP>),
 }
 
@@ -1136,8 +1138,8 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			ChannelPhase::Funded(chan) => &chan.context,
 			ChannelPhase::UnfundedOutboundV1(chan) => &chan.context,
 			ChannelPhase::UnfundedInboundV1(chan) => &chan.context,
-			#[cfg(any(dual_funding, splicing))]
-			ChannelPhase::UnfundedOutboundV2(chan) => &chan.context,
+			// #[cfg(any(dual_funding, splicing))]
+			// ChannelPhase::UnfundedOutboundV2(chan) => &chan.context,
 			// #[cfg(any(dual_funding, splicing))]
 			// ChannelPhase::UnfundedInboundV2(chan) => &chan.context,
 		}
@@ -1148,8 +1150,8 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 			ChannelPhase::Funded(ref mut chan) => &mut chan.context,
 			ChannelPhase::UnfundedOutboundV1(ref mut chan) => &mut chan.context,
 			ChannelPhase::UnfundedInboundV1(ref mut chan) => &mut chan.context,
-			#[cfg(any(dual_funding, splicing))]
-			ChannelPhase::UnfundedOutboundV2(ref mut chan) => &mut chan.context,
+			// #[cfg(any(dual_funding, splicing))]
+			// ChannelPhase::UnfundedOutboundV2(ref mut chan) => &mut chan.context,
 			// #[cfg(any(dual_funding, splicing))]
 			// ChannelPhase::UnfundedInboundV2(ref mut chan) => &mut chan.context,
 		}
@@ -3777,6 +3779,14 @@ impl<SP: Deref> Channel<SP> where
 	SP::Target: SignerProvider,
 	<SP::Target as SignerProvider>::EcdsaSigner: EcdsaChannelSigner
 {
+	pub fn is_unfunded(&self) -> bool {
+		self.unfunded_context.is_some()
+	}
+
+	pub fn is_v2(&self) -> bool {
+		self.dual_funding_context.is_some()
+	}
+
 	fn check_remote_fee<F: Deref, L: Deref>(
 		channel_type: &ChannelTypeFeatures, fee_estimator: &LowerBoundedFeeEstimator<F>,
 		feerate_per_kw: u32, cur_feerate_per_kw: Option<u32>, logger: &L
@@ -8251,6 +8261,7 @@ impl<SP: Deref> InboundV1Channel<SP> where SP::Target: SignerProvider {
 	}
 }
 
+/*
 // A not-yet-funded outbound (from holder) channel using V2 channel establishment.
 #[cfg(any(dual_funding, splicing))]
 pub(super) struct OutboundV2Channel<SP: Deref> where SP::Target: SignerProvider {
@@ -8534,6 +8545,7 @@ impl<SP: Deref> InboundV2Channel<SP> where SP::Target: SignerProvider {
 		self.generate_accept_channel_v2_message()
 	}
 }
+*/
 
 // Unfunded channel utilities
 

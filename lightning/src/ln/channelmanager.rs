@@ -1182,8 +1182,8 @@ impl <SP: Deref> PeerState<SP> where SP::Target: SignerProvider {
 			match phase {
 				ChannelPhase::Funded(_) | ChannelPhase::UnfundedOutboundV1(_) => true,
 				ChannelPhase::UnfundedInboundV1(_) => false,
-				#[cfg(any(dual_funding, splicing))]
-				ChannelPhase::UnfundedOutboundV2(_) => true,
+				// #[cfg(any(dual_funding, splicing))]
+				// ChannelPhase::UnfundedOutboundV2(_) => true,
 				// #[cfg(any(dual_funding, splicing))]
 				// ChannelPhase::UnfundedInboundV2(_) => false,
 			}
@@ -2813,10 +2813,10 @@ macro_rules! convert_chan_phase_err {
 			ChannelPhase::UnfundedInboundV1(channel) => {
 				convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
 			},
-			#[cfg(any(dual_funding, splicing))]
-			ChannelPhase::UnfundedOutboundV2(channel) => {
-				convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
-			},
+			// #[cfg(any(dual_funding, splicing))]
+			// ChannelPhase::UnfundedOutboundV2(channel) => {
+			// 	convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
+			// },
 			// #[cfg(any(dual_funding, splicing))]
 			// ChannelPhase::UnfundedInboundV2(channel) => {
 			// 	convert_chan_phase_err!($self, $err, channel, $channel_id, UNFUNDED_CHANNEL)
@@ -3736,14 +3736,13 @@ where
 						// Unfunded channel has no update
 						(None, chan_phase.context().get_counterparty_node_id())
 					},
-					// TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
-					#[cfg(any(dual_funding, splicing))]
+					// // TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
+					// #[cfg(any(dual_funding, splicing))]
 					// ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => {
-					ChannelPhase::UnfundedOutboundV2(_) => {
-						self.finish_close_channel(chan_phase.context_mut().force_shutdown(false, closure_reason));
-						// Unfunded channel has no update
-						(None, chan_phase.context().get_counterparty_node_id())
-					},
+					// 	self.finish_close_channel(chan_phase.context_mut().force_shutdown(false, closure_reason));
+					// 	// Unfunded channel has no update
+					// 	(None, chan_phase.context().get_counterparty_node_id())
+					// },
 				}
 			} else if peer_state.inbound_channel_request_by_id.remove(channel_id).is_some() {
 				log_error!(logger, "Force-closing channel {}", &channel_id);
@@ -6267,11 +6266,11 @@ where
 							// 	process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
 							// 		pending_msg_events, counterparty_node_id)
 							// },
-							#[cfg(any(dual_funding, splicing))]
-							ChannelPhase::UnfundedOutboundV2(chan) => {
-								process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
-									pending_msg_events, counterparty_node_id)
-							},
+							// #[cfg(any(dual_funding, splicing))]
+							// ChannelPhase::UnfundedOutboundV2(chan) => {
+							// 	process_unfunded_channel_tick(chan_id, &mut chan.context, &mut chan.unfunded_context,
+							// 		pending_msg_events, counterparty_node_id)
+							// },
 						}
 					});
 
@@ -7570,12 +7569,31 @@ where
 		for (_, phase) in peer.channel_by_id.iter() {
 			match phase {
 				ChannelPhase::Funded(chan) => {
-					// This covers non-zero-conf inbound `Channel`s that we are currently monitoring, but those
-					// which have not yet had any confirmations on-chain.
-					if !chan.context.is_outbound() && chan.context.minimum_depth().unwrap_or(1) != 0 &&
-						chan.context.get_funding_tx_confirmations(best_block_height) == 0
-					{
-						num_unfunded_channels += 1;
+					if chan.is_unfunded() {
+						// unfunded
+						if chan.is_v2() {
+							// unfunded v2
+							panic!("Not used");
+						} else {
+							// unfunded v1
+							if !chan.context.is_outbound() {
+								if chan.context.minimum_depth().unwrap_or(1) != 0 {
+									num_unfunded_channels += 1;
+								}
+							} else {
+								// Outbound channels don't contribute to the unfunded count in the DoS context.
+								continue;
+							}
+						}
+					} else {
+						// funded
+						// This covers non-zero-conf inbound `Channel`s that we are currently monitoring, but those
+						// which have not yet had any confirmations on-chain.
+						if !chan.context.is_outbound() && chan.context.minimum_depth().unwrap_or(1) != 0 &&
+							chan.context.get_funding_tx_confirmations(best_block_height) == 0
+						{
+							num_unfunded_channels += 1;
+						}
 					}
 				},
 				ChannelPhase::UnfundedInboundV1(chan) => {
@@ -7597,12 +7615,12 @@ where
 					// Outbound channels don't contribute to the unfunded count in the DoS context.
 					continue;
 				},
-				// TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
-				#[cfg(any(dual_funding, splicing))]
-				ChannelPhase::UnfundedOutboundV2(_) => {
-					// Outbound channels don't contribute to the unfunded count in the DoS context.
-					continue;
-				}
+				// // TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
+				// #[cfg(any(dual_funding, splicing))]
+				// ChannelPhase::UnfundedOutboundV2(_) => {
+				// 	// Outbound channels don't contribute to the unfunded count in the DoS context.
+				// 	continue;
+				// }
 			}
 		}
 		num_unfunded_channels + peer.inbound_channel_request_by_id.len()
@@ -7994,31 +8012,40 @@ where
 				let phase = chan_phase_entry.get_mut();
 				match phase {
 					ChannelPhase::Funded(chan) => {
-						if !chan.received_shutdown() {
-							let logger = WithChannelContext::from(&self.logger, &chan.context, None);
-							log_info!(logger, "Received a shutdown message from our counterparty for channel {}{}.",
-								msg.channel_id,
-								if chan.sent_shutdown() { " after we initiated shutdown" } else { "" });
-						}
+						if chan.is_unfunded() {
+							// unfunded
+							if chan.is_v2() {
+								// v2
+								panic!("Not used");
+							}
+						} else {
+							// funded
+							if !chan.received_shutdown() {
+								let logger = WithChannelContext::from(&self.logger, &chan.context, None);
+								log_info!(logger, "Received a shutdown message from our counterparty for channel {}{}.",
+									msg.channel_id,
+									if chan.sent_shutdown() { " after we initiated shutdown" } else { "" });
+							}
 
-						let funding_txo_opt = chan.context.get_funding_txo();
-						let (shutdown, monitor_update_opt, htlcs) = try_chan_phase_entry!(self,
-							chan.shutdown(&self.signer_provider, &peer_state.latest_features, &msg), chan_phase_entry);
-						dropped_htlcs = htlcs;
+							let funding_txo_opt = chan.context.get_funding_txo();
+							let (shutdown, monitor_update_opt, htlcs) = try_chan_phase_entry!(self,
+								chan.shutdown(&self.signer_provider, &peer_state.latest_features, &msg), chan_phase_entry);
+							dropped_htlcs = htlcs;
 
-						if let Some(msg) = shutdown {
-							// We can send the `shutdown` message before updating the `ChannelMonitor`
-							// here as we don't need the monitor update to complete until we send a
-							// `shutdown_signed`, which we'll delay if we're pending a monitor update.
-							peer_state.pending_msg_events.push(events::MessageSendEvent::SendShutdown {
-								node_id: *counterparty_node_id,
-								msg,
-							});
-						}
-						// Update the monitor with the shutdown script if necessary.
-						if let Some(monitor_update) = monitor_update_opt {
-							handle_new_monitor_update!(self, funding_txo_opt.unwrap(), monitor_update,
-								peer_state_lock, peer_state, per_peer_state, chan);
+							if let Some(msg) = shutdown {
+								// We can send the `shutdown` message before updating the `ChannelMonitor`
+								// here as we don't need the monitor update to complete until we send a
+								// `shutdown_signed`, which we'll delay if we're pending a monitor update.
+								peer_state.pending_msg_events.push(events::MessageSendEvent::SendShutdown {
+									node_id: *counterparty_node_id,
+									msg,
+								});
+							}
+							// Update the monitor with the shutdown script if necessary.
+							if let Some(monitor_update) = monitor_update_opt {
+								handle_new_monitor_update!(self, funding_txo_opt.unwrap(), monitor_update,
+									peer_state_lock, peer_state, per_peer_state, chan);
+							}
 						}
 					},
 					ChannelPhase::UnfundedInboundV1(_) | ChannelPhase::UnfundedOutboundV1(_) => {
@@ -8028,15 +8055,15 @@ where
 						let mut chan = remove_channel_phase!(self, chan_phase_entry);
 						finish_shutdown = Some(chan.context_mut().force_shutdown(false, ClosureReason::CounterpartyCoopClosedUnfundedChannel));
 					},
-					// TODO(dual_funding): Combine this match arm with above.
-					#[cfg(any(dual_funding, splicing))]
-					// ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
-					ChannelPhase::UnfundedOutboundV2(_) => {
-						let context = phase.context_mut();
-						log_error!(self.logger, "Immediately closing unfunded channel {} as peer asked to cooperatively shut it down (which is unnecessary)", &msg.channel_id);
-						let mut chan = remove_channel_phase!(self, chan_phase_entry);
-						finish_shutdown = Some(chan.context_mut().force_shutdown(false, ClosureReason::CounterpartyCoopClosedUnfundedChannel));
-					},
+					// // TODO(dual_funding): Combine this match arm with above.
+					// #[cfg(any(dual_funding, splicing))]
+					// // ChannelPhase::UnfundedInboundV2(_) | ChannelPhase::UnfundedOutboundV2(_) => {
+					// ChannelPhase::UnfundedOutboundV2(_) => {
+					// 	let context = phase.context_mut();
+					// 	log_error!(self.logger, "Immediately closing unfunded channel {} as peer asked to cooperatively shut it down (which is unnecessary)", &msg.channel_id);
+					// 	let mut chan = remove_channel_phase!(self, chan_phase_entry);
+					// 	finish_shutdown = Some(chan.context_mut().force_shutdown(false, ClosureReason::CounterpartyCoopClosedUnfundedChannel));
+					// },
 				}
 			} else {
 				return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Got a message for a channel from the wrong node! No such channel for the passed counterparty_node_id {}", counterparty_node_id), msg.channel_id))
@@ -10186,10 +10213,9 @@ where
 					match phase {
 						// Retain unfunded channels.
 						ChannelPhase::UnfundedOutboundV1(_) | ChannelPhase::UnfundedInboundV1(_) => true,
-						// TODO(dual_funding): Combine this match arm with above.
-						#[cfg(any(dual_funding, splicing))]
+						// // TODO(dual_funding): Combine this match arm with above.
+						// #[cfg(any(dual_funding, splicing))]
 						// ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => true,
-						ChannelPhase::UnfundedOutboundV2(_) => true,
 						ChannelPhase::Funded(channel) => {
 							let res = f(channel);
 							if let Ok((channel_ready_opt, mut timed_out_pending_htlcs, announcement_sigs)) = res {
@@ -10671,10 +10697,10 @@ where
 						ChannelPhase::UnfundedInboundV1(chan) => {
 							&mut chan.context
 						},
-						#[cfg(any(dual_funding, splicing))]
-						ChannelPhase::UnfundedOutboundV2(chan) => {
-							&mut chan.context
-						},
+						// #[cfg(any(dual_funding, splicing))]
+						// ChannelPhase::UnfundedOutboundV2(chan) => {
+						// 	&mut chan.context
+						// },
 						// #[cfg(any(dual_funding, splicing))]
 						// ChannelPhase::UnfundedInboundV2(chan) => {
 						// 	&mut chan.context
@@ -10836,14 +10862,14 @@ where
 							});
 						}
 
-						// TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
-						#[cfg(any(dual_funding, splicing))]
-						ChannelPhase::UnfundedOutboundV2(chan) => {
-							pending_msg_events.push(events::MessageSendEvent::SendOpenChannelV2 {
-								node_id: chan.context.get_counterparty_node_id(),
-								msg: chan.get_open_channel_v2(self.chain_hash),
-							});
-						},
+						// // TODO(dual_funding): Combine this match arm with above once #[cfg(any(dual_funding, splicing))] is removed.
+						// #[cfg(any(dual_funding, splicing))]
+						// ChannelPhase::UnfundedOutboundV2(chan) => {
+						// 	pending_msg_events.push(events::MessageSendEvent::SendOpenChannelV2 {
+						// 		node_id: chan.context.get_counterparty_node_id(),
+						// 		msg: chan.get_open_channel_v2(self.chain_hash),
+						// 	});
+						// },
 
 						ChannelPhase::UnfundedInboundV1(_) => {
 							// Since unfunded inbound channel maps are cleared upon disconnecting a peer,
@@ -10956,16 +10982,16 @@ where
 							return;
 						}
 					},
-					#[cfg(any(dual_funding, splicing))]
-					Some(ChannelPhase::UnfundedOutboundV2(ref mut chan)) => {
-						if let Ok(msg) = chan.maybe_handle_error_without_close(self.chain_hash, &self.fee_estimator) {
-							peer_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannelV2 {
-								node_id: counterparty_node_id,
-								msg,
-							});
-							return;
-						}
-					},
+					// #[cfg(any(dual_funding, splicing))]
+					// Some(ChannelPhase::UnfundedOutboundV2(ref mut chan)) => {
+					// 	if let Ok(msg) = chan.maybe_handle_error_without_close(self.chain_hash, &self.fee_estimator) {
+					// 		peer_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannelV2 {
+					// 			node_id: counterparty_node_id,
+					// 			msg,
+					// 		});
+					// 		return;
+					// 	}
+					// },
 					None | Some(ChannelPhase::UnfundedInboundV1(_) | ChannelPhase::Funded(_)) => (),
 					// #[cfg(any(dual_funding, splicing))]
 					// Some(ChannelPhase::UnfundedInboundV2(_)) => (),
