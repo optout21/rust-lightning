@@ -20,7 +20,7 @@ use crate::chain::transaction::OutPoint;
 use crate::sign::{ecdsa::EcdsaChannelSigner, EntropySource, OutputSpender, SignerProvider};
 use crate::events::{Event, FundingInfo, MessageSendEvent, MessageSendEventsProvider, PathFailure, PaymentPurpose, ClosureReason, HTLCDestination, PaymentFailureReason};
 use crate::ln::types::{ChannelId, PaymentPreimage, PaymentSecret, PaymentHash};
-use crate::ln::channel::{CONCURRENT_INBOUND_HTLC_FEE_BUFFER, FEE_SPIKE_BUFFER_FEE_INCREASE_MULTIPLE, MIN_AFFORDABLE_HTLC_COUNT, get_holder_selected_channel_reserve_satoshis, OutboundV1Channel, InboundV1Channel, COINBASE_MATURITY, ChannelPhase};
+use crate::ln::channel::{CONCURRENT_INBOUND_HTLC_FEE_BUFFER, FEE_SPIKE_BUFFER_FEE_INCREASE_MULTIPLE, MIN_AFFORDABLE_HTLC_COUNT, get_holder_selected_channel_reserve_satoshis, Channel, COINBASE_MATURITY, ChannelPhase};
 use crate::ln::channelmanager::{self, PaymentId, RAACommitmentOrder, PaymentSendFailure, RecipientOnionFields, BREAKDOWN_TIMEOUT, ENABLE_GOSSIP_TICKS, DISABLE_GOSSIP_TICKS, MIN_CLTV_EXPIRY_DELTA};
 use crate::ln::channel::{DISCONNECT_PEER_AWAITING_RESPONSE_TICKS, ChannelError};
 use crate::ln::{chan_utils, onion_utils};
@@ -215,11 +215,12 @@ fn do_test_counterparty_no_reserve(send_from_initiator: bool) {
 
 		let channel_phase = get_channel_ref!(sender_node, counterparty_node, sender_node_per_peer_lock, sender_node_peer_state_lock, temp_channel_id);
 		match channel_phase {
-			ChannelPhase::UnfundedInboundV1(_) | ChannelPhase::UnfundedOutboundV1(_) => {
-				let chan_context = channel_phase.context_mut();
-				chan_context.holder_selected_channel_reserve_satoshis = 0;
-				chan_context.holder_max_htlc_value_in_flight_msat = 100_000_000;
-			},
+			ChannelPhase::Funded(ref mut chan) => {
+				debug_assert!(chan.is_unfunded());
+				debug_assert!(!chan.is_v2());
+				chan.context.holder_selected_channel_reserve_satoshis = 0;
+				chan.context.holder_max_htlc_value_in_flight_msat = 100_000_000;
+			}
 			_ => assert!(false),
 		}
 	}
@@ -7248,8 +7249,8 @@ fn test_user_configurable_csv_delay() {
 	let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
 	let logger = TestLogger::new();
 
-	// We test config.our_to_self > BREAKDOWN_TIMEOUT is enforced in OutboundV1Channel::new()
-	if let Err(error) = OutboundV1Channel::new(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator::new(253)),
+	// We test config.our_to_self > BREAKDOWN_TIMEOUT is enforced in Channel::v1_out_new()
+	if let Err(error) = Channel::v1_out_new(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator::new(253)),
 		&nodes[0].keys_manager, &nodes[0].keys_manager, nodes[1].node.get_our_node_id(), &nodes[1].node.init_features(), 1000000, 1000000, 0,
 		&low_our_to_self_config, 0, 42, None, &logger)
 	{
@@ -7259,11 +7260,11 @@ fn test_user_configurable_csv_delay() {
 		}
 	} else { assert!(false) }
 
-	// We test config.our_to_self > BREAKDOWN_TIMEOUT is enforced in InboundV1Channel::new()
+	// We test config.our_to_self > BREAKDOWN_TIMEOUT is enforced in Channel::v1_in_new()
 	nodes[1].node.create_channel(nodes[0].node.get_our_node_id(), 1000000, 1000000, 42, None, None).unwrap();
 	let mut open_channel = get_event_msg!(nodes[1], MessageSendEvent::SendOpenChannel, nodes[0].node.get_our_node_id());
 	open_channel.common_fields.to_self_delay = 200;
-	if let Err(error) = InboundV1Channel::new(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator::new(253)),
+	if let Err(error) = Channel::v1_in_new(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator::new(253)),
 		&nodes[0].keys_manager, &nodes[0].keys_manager, nodes[1].node.get_our_node_id(), &nodes[0].node.channel_type_features(), &nodes[1].node.init_features(), &open_channel, 0,
 		&low_our_to_self_config, 0, &nodes[0].logger, /*is_0conf=*/false)
 	{
@@ -7276,7 +7277,7 @@ fn test_user_configurable_csv_delay() {
 		}
 	} else { assert!(false); }
 
-	// We test msg.to_self_delay <= config.their_to_self_delay is enforced in Chanel::accept_channel()
+	// We test msg.to_self_delay <= config.their_to_self_delay is enforced in Chanel::v1_out_accept_channel()
 	nodes[0].node.create_channel(nodes[1].node.get_our_node_id(), 1000000, 1000000, 42, None, None).unwrap();
 	nodes[1].node.handle_open_channel(nodes[0].node.get_our_node_id(), &get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, nodes[1].node.get_our_node_id()));
 	let mut accept_channel = get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannel, nodes[0].node.get_our_node_id());
@@ -7294,11 +7295,11 @@ fn test_user_configurable_csv_delay() {
 	} else { panic!(); }
 	check_closed_event!(nodes[0], 1, ClosureReason::ProcessingError { err: reason_msg }, [nodes[1].node.get_our_node_id()], 1000000);
 
-	// We test msg.to_self_delay <= config.their_to_self_delay is enforced in InboundV1Channel::new()
+	// We test msg.to_self_delay <= config.their_to_self_delay is enforced in Channel::v1_in_new()
 	nodes[1].node.create_channel(nodes[0].node.get_our_node_id(), 1000000, 1000000, 42, None, None).unwrap();
 	let mut open_channel = get_event_msg!(nodes[1], MessageSendEvent::SendOpenChannel, nodes[0].node.get_our_node_id());
 	open_channel.common_fields.to_self_delay = 200;
-	if let Err(error) = InboundV1Channel::new(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator::new(253)),
+	if let Err(error) = Channel::v1_in_new(&LowerBoundedFeeEstimator::new(&test_utils::TestFeeEstimator::new(253)),
 		&nodes[0].keys_manager, &nodes[0].keys_manager, nodes[1].node.get_our_node_id(), &nodes[0].node.channel_type_features(), &nodes[1].node.init_features(), &open_channel, 0,
 		&high_their_to_self_config, 0, &nodes[0].logger, /*is_0conf=*/false)
 	{
@@ -9293,15 +9294,18 @@ fn test_duplicate_chan_id() {
 	let funding_created = {
 		let per_peer_state = nodes[0].node.per_peer_state.read().unwrap();
 		let mut a_peer_state = per_peer_state.get(&nodes[1].node.get_our_node_id()).unwrap().lock().unwrap();
-		// Once we call `get_funding_created` the channel has a duplicate channel_id as
+		// Once we call `v1_out_get_funding_created` the channel has a duplicate channel_id as
 		// another channel in the ChannelManager - an invalid state. Thus, we'd panic later when we
 		// try to create another channel. Instead, we drop the channel entirely here (leaving the
 		// channelmanager in a possibly nonsense state instead).
 		match a_peer_state.channel_by_id.remove(&open_chan_2_msg.common_fields.temporary_channel_id).unwrap() {
-			ChannelPhase::UnfundedOutboundV1(mut chan) => {
+			ChannelPhase::Funded(mut chan) => {
+				debug_assert!(chan.is_unfunded());
+				debug_assert!(!chan.is_v2());
+				debug_assert!(chan.context.is_outbound());
 				let logger = test_utils::TestLogger::new();
-				chan.get_funding_created(tx.clone(), funding_outpoint, false, &&logger).map_err(|_| ()).unwrap()
-			},
+				chan.v1_out_get_funding_created(tx.clone(), funding_outpoint, false, &&logger).map_err(|_| ()).unwrap()
+			}
 			_ => panic!("Unexpected ChannelPhase variant"),
 		}.unwrap()
 	};
@@ -10004,9 +10008,12 @@ fn do_test_max_dust_htlc_exposure(dust_outbound_balance: bool, exposure_breach_e
 		let mut node_0_per_peer_lock;
 		let mut node_0_peer_state_lock;
 		match get_channel_ref!(nodes[0], nodes[1], node_0_per_peer_lock, node_0_peer_state_lock, temporary_channel_id) {
-			ChannelPhase::UnfundedOutboundV1(chan) => {
+			ChannelPhase::Funded(chan) => {
+				debug_assert!(chan.is_unfunded());
+				debug_assert!(!chan.is_v2());
+				debug_assert!(chan.context.is_outbound());
 				chan.context.holder_dust_limit_satoshis = 546;
-			},
+			}
 			_ => panic!("Unexpected ChannelPhase variant"),
 		}
 	}
@@ -10730,7 +10737,7 @@ fn test_channel_close_when_not_timely_accepted() {
 	nodes[0].node.peer_disconnected(nodes[1].node.get_our_node_id());
 	nodes[1].node.peer_disconnected(nodes[0].node.get_our_node_id());
 
-	// Make sure that we have not removed the OutboundV1Channel from node[0] immediately.
+	// Make sure that we have not removed the Channel from node[0] immediately.
 	assert_eq!(nodes[0].node.list_channels().len(), 1);
 
 	// Since channel was inbound from node[1] perspective, it should have been dropped immediately.
@@ -10773,7 +10780,7 @@ fn test_rebroadcast_open_channel_when_reconnect_mid_handshake() {
 	nodes[0].node.peer_disconnected(nodes[1].node.get_our_node_id());
 	nodes[1].node.peer_disconnected(nodes[0].node.get_our_node_id());
 
-	// Make sure that we have not removed the OutboundV1Channel from node[0] immediately.
+	// Make sure that we have not removed the Channel from node[0] immediately.
 	assert_eq!(nodes[0].node.list_channels().len(), 1);
 
 	// Since channel was inbound from node[1] perspective, it should have been immediately dropped.
