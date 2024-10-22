@@ -20,7 +20,7 @@ use crate::chain::transaction::OutPoint;
 use crate::chain::{ChannelMonitorUpdateStatus, Listen, Watch};
 use crate::events::{Event, MessageSendEvent, MessageSendEventsProvider, PaymentPurpose, ClosureReason, HTLCDestination};
 use crate::ln::channelmanager::{RAACommitmentOrder, PaymentSendFailure, PaymentId, RecipientOnionFields};
-use crate::ln::channel::{AnnouncementSigsState, ChannelPhase};
+use crate::ln::channel::AnnouncementSigsState;
 use crate::ln::msgs;
 use crate::ln::types::ChannelId;
 use crate::ln::msgs::{ChannelMessageHandler, RoutingMessageHandler};
@@ -98,18 +98,17 @@ fn test_monitor_and_persister_update_fail() {
 	{
 		let mut node_0_per_peer_lock;
 		let mut node_0_peer_state_lock;
-		if let ChannelPhase::Funded(ref mut channel) = get_channel_ref!(nodes[0], nodes[1], node_0_per_peer_lock, node_0_peer_state_lock, chan.2) {
-			if let Ok(Some(update)) = channel.commitment_signed(&updates.commitment_signed, &node_cfgs[0].logger) {
-				// Check that the persister returns InProgress (and will never actually complete)
-				// as the monitor update errors.
-				if let ChannelMonitorUpdateStatus::InProgress = chain_mon.chain_monitor.update_channel(outpoint, &update) {} else { panic!("Expected monitor paused"); }
-				logger.assert_log_regex("lightning::chain::chainmonitor", regex::Regex::new("Failed to update ChannelMonitor for channel [0-9a-f]*.").unwrap(), 1);
+		let channel = get_channel_ref!(nodes[0], nodes[1], node_0_per_peer_lock, node_0_peer_state_lock, chan.2).channel_mut();
+		if let Ok(Some(update)) = channel.commitment_signed(&updates.commitment_signed, &node_cfgs[0].logger) {
+			// Check that the persister returns InProgress (and will never actually complete)
+			// as the monitor update errors.
+			if let ChannelMonitorUpdateStatus::InProgress = chain_mon.chain_monitor.update_channel(outpoint, &update) {} else { panic!("Expected monitor paused"); }
+			logger.assert_log_regex("lightning::chain::chainmonitor", regex::Regex::new("Failed to update ChannelMonitor for channel [0-9a-f]*.").unwrap(), 1);
 
-				// Apply the monitor update to the original ChainMonitor, ensuring the
-				// ChannelManager and ChannelMonitor aren't out of sync.
-				assert_eq!(nodes[0].chain_monitor.update_channel(outpoint, &update),
-					ChannelMonitorUpdateStatus::Completed);
-			} else { assert!(false); }
+			// Apply the monitor update to the original ChainMonitor, ensuring the
+			// ChannelManager and ChannelMonitor aren't out of sync.
+			assert_eq!(nodes[0].chain_monitor.update_channel(outpoint, &update),
+				ChannelMonitorUpdateStatus::Completed);
 		} else {
 			assert!(false);
 		}

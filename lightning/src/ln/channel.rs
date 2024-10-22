@@ -1131,28 +1131,30 @@ impl<'a, SP: Deref> ChannelPhase<SP> where
 	SP::Target: SignerProvider,
 	<SP::Target as SignerProvider>::EcdsaSigner: ChannelSigner,
 {
-	pub fn context(&'a self) -> &'a ChannelContext<SP> {
-		match self {
-			ChannelPhase::Funded(chan) => &chan.context,
-			// ChannelPhase::UnfundedOutboundV1(chan) => &chan.context,
-			// ChannelPhase::UnfundedInboundV1(chan) => &chan.context,
-			// #[cfg(any(dual_funding, splicing))]
-			// ChannelPhase::UnfundedOutboundV2(chan) => &chan.context,
-			// #[cfg(any(dual_funding, splicing))]
-			// ChannelPhase::UnfundedInboundV2(chan) => &chan.context,
+	pub fn channel(&'a self) -> &'a Channel<SP> {
+		match &self {
+			ChannelPhase::Funded(chan) => &chan,
 		}
 	}
 
-	pub fn context_mut(&'a mut self) -> &'a mut ChannelContext<SP> {
+	pub fn channel_mut(&'a mut self) -> &'a mut Channel<SP> {
 		match self {
-			ChannelPhase::Funded(ref mut chan) => &mut chan.context,
-			// ChannelPhase::UnfundedOutboundV1(ref mut chan) => &mut chan.context,
-			// ChannelPhase::UnfundedInboundV1(ref mut chan) => &mut chan.context,
-			// #[cfg(any(dual_funding, splicing))]
-			// ChannelPhase::UnfundedOutboundV2(ref mut chan) => &mut chan.context,
-			// #[cfg(any(dual_funding, splicing))]
-			// ChannelPhase::UnfundedInboundV2(ref mut chan) => &mut chan.context,
+			ChannelPhase::Funded(ref mut chan) => chan,
 		}
+	}
+
+	pub fn channel_take(self) -> Channel<SP> {
+		match self {
+			ChannelPhase::Funded(chan) => chan,
+		}
+	}
+
+	pub fn context(&'a self) -> &'a ChannelContext<SP> {
+		&self.channel().context
+	}
+
+	pub fn context_mut(&'a mut self) -> &'a mut ChannelContext<SP> {
+		&mut self.channel_mut().context
 	}
 }
 
