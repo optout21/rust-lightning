@@ -1115,46 +1115,39 @@ impl_writeable_tlv_based!(PendingChannelMonitorUpdate, {
 	(0, update, required),
 });
 
-/// The `ChannelPhase` enum describes the current phase in life of a lightning channel with each of
-/// its variants containing an appropriate channel struct.
-pub(super) enum ChannelPhase<SP: Deref> where SP::Target: SignerProvider {
-	// UnfundedOutboundV1(OutboundV1Channel<SP>),
-	// UnfundedInboundV1(InboundV1Channel<SP>),
-	// #[cfg(any(dual_funding, splicing))]
-	// UnfundedOutboundV2(OutboundV2Channel<SP>),
-	// #[cfg(any(dual_funding, splicing))]
-	// UnfundedInboundV2(InboundV2Channel<SP>),
-	Funded(Channel<SP>),
+/// `ChannelWrapper`: just a dummy wrapper for `Channel`, kept for b/w compatibilit (so that some code can be untouched).
+/// Could be just replaced by `Channel<SP>`.
+/// Used to be the `ChannelPhase` enum
+pub(super) struct ChannelWrapper<SP: Deref> where SP::Target: SignerProvider {
+	channel: Channel<SP>,
 }
 
-impl<'a, SP: Deref> ChannelPhase<SP> where
+impl<'a, SP: Deref> ChannelWrapper<SP> where
 	SP::Target: SignerProvider,
 	<SP::Target as SignerProvider>::EcdsaSigner: ChannelSigner,
 {
+	pub fn new(channel: Channel<SP>) -> Self {
+		Self { channel }
+	}
+
 	pub fn channel(&'a self) -> &'a Channel<SP> {
-		match &self {
-			ChannelPhase::Funded(chan) => &chan,
-		}
+		&self.channel
 	}
 
 	pub fn channel_mut(&'a mut self) -> &'a mut Channel<SP> {
-		match self {
-			ChannelPhase::Funded(ref mut chan) => chan,
-		}
+		&mut self.channel
 	}
 
 	pub fn channel_take(self) -> Channel<SP> {
-		match self {
-			ChannelPhase::Funded(chan) => chan,
-		}
+		self.channel
 	}
 
 	pub fn context(&'a self) -> &'a ChannelContext<SP> {
-		&self.channel().context
+		&self.channel.context
 	}
 
 	pub fn context_mut(&'a mut self) -> &'a mut ChannelContext<SP> {
-		&mut self.channel_mut().context
+		&mut self.channel.context
 	}
 }
 

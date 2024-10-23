@@ -48,7 +48,7 @@ use crate::events::{Event, EventHandler, EventsProvider, MessageSendEvent, Messa
 // construct one themselves.
 use crate::ln::inbound_payment;
 use crate::ln::types::{ChannelId, PaymentHash, PaymentPreimage, PaymentSecret};
-use crate::ln::channel::{self, Channel, ChannelPhase, ChannelContext, ChannelError, ChannelUpdateStatus, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, WithChannelContext};
+use crate::ln::channel::{self, Channel, ChannelWrapper, ChannelContext, ChannelError, ChannelUpdateStatus, ShutdownResult, UnfundedChannelContext, UpdateFulfillCommitFetch, WithChannelContext};
 use crate::ln::channel_state::ChannelDetails;
 use crate::ln::features::{Bolt12InvoiceFeatures, ChannelFeatures, ChannelTypeFeatures, InitFeatures, NodeFeatures};
 #[cfg(any(feature = "_test_utils", test))]
@@ -1121,10 +1121,10 @@ impl Readable for Option<RAAMonitorUpdateBlockingAction> {
 
 /// State we hold per-peer.
 pub(super) struct PeerState<SP: Deref> where SP::Target: SignerProvider {
-	/// `channel_id` -> `ChannelPhase`
+	/// `channel_id` -> `ChannelWrapper`
 	///
-	/// Holds all channels within corresponding `ChannelPhase`s where the peer is the counterparty.
-	pub(super) channel_by_id: HashMap<ChannelId, ChannelPhase<SP>>,
+	/// Holds all channels within corresponding `ChannelWrapper`s where the peer is the counterparty.
+	pub(super) channel_by_id: HashMap<ChannelId, ChannelWrapper<SP>>,
 	/// `temporary_channel_id` -> `InboundChannelRequest`.
 	///
 	/// When manual channel acceptance is enabled, this holds all unaccepted inbound channels where
@@ -3360,7 +3360,7 @@ where
 					panic!("RNG is bad???");
 				}
 			},
-			hash_map::Entry::Vacant(entry) => { entry.insert(ChannelPhase::Funded(channel)); }
+			hash_map::Entry::Vacant(entry) => { entry.insert(ChannelWrapper::new(channel)); }
 		}
 
 		peer_state.pending_msg_events.push(events::MessageSendEvent::SendOpenChannel {
@@ -3386,7 +3386,6 @@ where
 				let peer_state = &mut *peer_state_lock;
 				res.extend(peer_state.channel_by_id.iter()
 					.filter_map(|(chan_id, phase)| {
-						// Only `Channels` in the `ChannelPhase::Funded` phase can be considered funded.
 						let chan = phase.channel();
 						if chan.is_unfunded() { None } else { Some((chan_id, chan)) }
 					})
@@ -4758,7 +4757,7 @@ where
 								}
 							}
 						} else {
-							peer_state.channel_by_id.insert(temporary_channel_id, ChannelPhase::Funded(chan));
+							peer_state.channel_by_id.insert(temporary_channel_id, ChannelWrapper::new(chan));
 							return Err(APIError::APIMisuseError {
 								err: format!(
 									"Channel with id {} for the passed counterparty node_id {} is not an outbound channel",
@@ -4767,7 +4766,7 @@ where
 						}
 					}
 				} else {
-					peer_state.channel_by_id.insert(temporary_channel_id, ChannelPhase::Funded(chan));
+					peer_state.channel_by_id.insert(temporary_channel_id, ChannelWrapper::new(chan));
 					return Err(APIError::APIMisuseError {
 						err: format!(
 							"Channel with id {} for the passed counterparty node_id {} is not an unfunded channel",
@@ -4811,7 +4810,7 @@ where
 						return Err(APIError::ChannelUnavailable { err });
 					}
 				}
-				e.insert(ChannelPhase::Funded(chan));
+				e.insert(ChannelWrapper::new(chan));
 			}
 		}
 		Ok(())
@@ -7540,8 +7539,7 @@ where
 					msg: channel.v1_in_accept_inbound_channel(),
 				});
 
-				// peer_state.channel_by_id.insert(temporary_channel_id.clone(), ChannelPhase::UnfundedInboundV1(channel));
-				peer_state.channel_by_id.insert(temporary_channel_id.clone(), ChannelPhase::Funded(channel));
+				peer_state.channel_by_id.insert(temporary_channel_id.clone(), ChannelWrapper::new(channel));
 
 				Ok(())
 			},
@@ -7722,7 +7720,7 @@ where
 			node_id: counterparty_node_id.clone(),
 			msg: channel.v1_in_accept_inbound_channel(),
 		});
-		peer_state.channel_by_id.insert(channel_id, ChannelPhase::Funded(channel));
+		peer_state.channel_by_id.insert(channel_id, ChannelWrapper::new(channel));
 		Ok(())
 	}
 
@@ -7862,7 +7860,7 @@ where
 								});
 							}
 
-							let phase = e.insert(ChannelPhase::Funded(chan));
+							let phase = e.insert(ChannelWrapper::new(chan));
 							handle_new_monitor_update!(self, persist_state, peer_state_lock, peer_state,
 								per_peer_state, phase.channel_mut(), INITIAL_MONITOR);
 							Ok(())
@@ -7911,7 +7909,7 @@ where
 										// We really should be able to insert here without doing a second
 										// lookup, but sadly rust stdlib doesn't currently allow keeping
 										// the original Entry around with the value removed.
-										let phase = peer_state.channel_by_id.entry(msg.channel_id).or_insert(ChannelPhase::Funded(chan));
+										let phase = peer_state.channel_by_id.entry(msg.channel_id).or_insert(ChannelWrapper::new(chan));
 										handle_new_monitor_update!(self, persist_status, peer_state_lock, peer_state, per_peer_state, phase.channel_mut(), INITIAL_MONITOR);
 										Ok(())
 									} else {
@@ -8915,7 +8913,7 @@ where
 		let _persistence_guard = PersistenceNotifierGuard::notify_on_drop(self);
 
 		// Returns whether we should remove this channel as it's just been closed.
-		let unblock_chan = |phase: &mut ChannelPhase<SP>, pending_msg_events: &mut Vec<MessageSendEvent>| -> Option<ShutdownResult> {
+		let unblock_chan = |phase: &mut ChannelWrapper<SP>, pending_msg_events: &mut Vec<MessageSendEvent>| -> Option<ShutdownResult> {
 			let node_id = phase.context().get_counterparty_node_id();
 			let chan = phase.channel_mut();
 			if chan.is_unfunded() {
@@ -10213,11 +10211,6 @@ where
 
 				peer_state.channel_by_id.retain(|_, phase| {
 					let channel = phase.channel_mut();
-					// Retain unfunded channels.
-					// ChannelPhase::UnfundedOutboundV1(_) | ChannelPhase::UnfundedInboundV1(_) => true,
-					// // TODO(dual_funding): Combine this match arm with above.
-					// #[cfg(any(dual_funding, splicing))]
-					// ChannelPhase::UnfundedOutboundV2(_) | ChannelPhase::UnfundedInboundV2(_) => true,
 					if channel.is_unfunded() {
 						if channel.is_v2() {
 							panic!("Not used");
@@ -12260,7 +12253,7 @@ where
 
 		let channel_count: u64 = Readable::read(reader)?;
 		let mut funding_txo_set = hash_set_with_capacity(cmp::min(channel_count as usize, 128));
-		let mut funded_peer_channels: HashMap<PublicKey, HashMap<ChannelId, ChannelPhase<SP>>> = hash_map_with_capacity(cmp::min(channel_count as usize, 128));
+		let mut funded_peer_channels: HashMap<PublicKey, HashMap<ChannelId, ChannelWrapper<SP>>> = hash_map_with_capacity(cmp::min(channel_count as usize, 128));
 		let mut outpoint_to_peer = hash_map_with_capacity(cmp::min(channel_count as usize, 128));
 		let mut short_to_chan_info = hash_map_with_capacity(cmp::min(channel_count as usize, 128));
 		let mut channel_closures = VecDeque::new();
@@ -12351,11 +12344,11 @@ where
 					match funded_peer_channels.entry(channel.context.get_counterparty_node_id()) {
 						hash_map::Entry::Occupied(mut entry) => {
 							let by_id_map = entry.get_mut();
-							by_id_map.insert(channel.context.channel_id(), ChannelPhase::Funded(channel));
+							by_id_map.insert(channel.context.channel_id(), ChannelWrapper::new(channel));
 						},
 						hash_map::Entry::Vacant(entry) => {
 							let mut by_id_map = new_hash_map();
-							by_id_map.insert(channel.context.channel_id(), ChannelPhase::Funded(channel));
+							by_id_map.insert(channel.context.channel_id(), ChannelWrapper::new(channel));
 							entry.insert(by_id_map);
 						}
 					}
