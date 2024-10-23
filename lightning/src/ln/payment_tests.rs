@@ -891,7 +891,7 @@ fn do_test_completed_payment_not_retryable_on_reload(use_dust: bool) {
 	nodes[0].node.timer_tick_occurred();
 	assert!(nodes[0].node.list_channels().is_empty());
 	assert!(nodes[0].node.has_pending_payments());
-	assert_eq!(nodes[0].tx_broadcaster.txn_broadcasted.lock().unwrap().split_off(0).len(), 4);
+	assert_eq!(nodes[0].tx_broadcaster.txn_broadcasted.lock().unwrap().split_off(0).len(), 1);
 	check_added_monitors!(nodes[0], 1);
 
 	nodes[0].node.peer_connected(nodes[1].node.get_our_node_id(), &msgs::Init {

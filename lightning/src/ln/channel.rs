@@ -5489,10 +5489,18 @@ impl<SP: Deref> Channel<SP> where
 				// Take the funding transaction, do not clear the field
 				self.context.funding_transaction.clone()
 			} else { None };
-		// That said, if the funding transaction is already confirmed (ie we're active with a
-		// minimum_depth over 0) don't bother re-broadcasting the confirmed funding tx.
-		if matches!(self.context.channel_state, ChannelState::ChannelReady(_)) && self.context.minimum_depth != Some(0) {
-			funding_broadcastable = None;
+		// That said, if the funding transaction is already confirmed,
+		// don't bother re-broadcasting the confirmed funding tx.
+		if funding_broadcastable.is_some() {
+			if let Some(height) = self.context.get_funding_tx_confirmation_height() {
+				if let Some(block) = self.context.get_funding_tx_confirmed_in() {
+					log_debug!(logger,
+						"Not rebroadcasting funding tx, as it's already confirmed, height: {} block: {} txid: {}",
+						height, block, funding_broadcastable.unwrap().txid()
+					);
+					funding_broadcastable = None;
+				}
+			}
 		}
 
 		// We will never broadcast the funding transaction when we're in MonitorUpdateInProgress
