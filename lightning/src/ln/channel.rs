@@ -5481,24 +5481,19 @@ impl<SP: Deref> Channel<SP> where
 		// If we're past (or at) the AwaitingChannelReady stage on an outbound channel, try to
 		// (re-)broadcast the funding transaction as we may have declined to broadcast it when we
 		// first received the funding_signed.
-		let mut funding_broadcastable =
+		let mut funding_broadcastable = None;
+		if let Some(funding_transaction) = &self.context.funding_transaction {
 			if self.context.is_outbound() &&
 				(matches!(self.context.channel_state, ChannelState::AwaitingChannelReady(flags) if !flags.is_set(AwaitingChannelReadyFlags::WAITING_FOR_BATCH)) ||
 				matches!(self.context.channel_state, ChannelState::ChannelReady(_)))
 			{
-				// Take the funding transaction, do not clear the field
-				self.context.funding_transaction.clone()
-			} else { None };
-		// That said, if the funding transaction is already confirmed,
-		// don't bother re-broadcasting the confirmed funding tx.
-		if funding_broadcastable.is_some() {
-			if let Some(height) = self.context.get_funding_tx_confirmation_height() {
-				if let Some(block) = self.context.get_funding_tx_confirmed_in() {
+				// Broadcast only if not yet confirmed
+				if self.context.get_funding_tx_confirmation_height().is_none() || self.context.get_funding_tx_confirmed_in().is_none() {
+					funding_broadcastable = Some(funding_transaction.clone())
+				} else {
 					log_debug!(logger,
-						"Not rebroadcasting funding tx, as it's already confirmed, height: {} block: {} txid: {}",
-						height, block, funding_broadcastable.unwrap().txid()
-					);
-					funding_broadcastable = None;
+						"Not rebroadcasting funding tx, already confirmed, height: {} txid: {}",
+						self.context.get_funding_tx_confirmation_height().unwrap_or_default(), funding_transaction.compute_txid());
 				}
 			}
 		}
