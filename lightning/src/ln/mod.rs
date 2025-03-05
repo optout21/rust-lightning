@@ -60,7 +60,7 @@ mod blinded_payment_tests;
 mod async_payments_tests;
 #[cfg(test)]
 #[allow(unused_mut)]
-mod functional_tests;
+pub mod functional_tests;
 #[cfg(all(test, splicing))]
 #[allow(unused_mut)]
 mod functional_tests_splice;
