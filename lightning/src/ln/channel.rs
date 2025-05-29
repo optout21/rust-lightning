@@ -9237,11 +9237,13 @@ impl<SP: Deref> FundedChannel<SP> where
 
 	/// Helper to build the FundingScope for the splicing channel
 	#[cfg(splicing)]
-	fn funding_scope_for_splice(&self, our_funding_satoshis: u64, post_channel_value: u64) -> FundingScope {
+	fn funding_scope_for_splice(&self, our_funding_satoshis: u64, post_channel_value: u64, is_outbound: bool, counterparty_funding_pubkey: PublicKey) -> FundingScope {
 		let post_value_to_self_msat = self.funding.value_to_self_msat.saturating_add(our_funding_satoshis);
 
 		let mut post_channel_transaction_parameters = self.funding.channel_transaction_parameters.clone();
+		// Updated fields:
 		post_channel_transaction_parameters.channel_value_satoshis = post_channel_value;
+		post_channel_transaction_parameters.is_outbound_from_holder = is_outbound;
 		// Update the splicing 'tweak', this will rotate the keys in the signer
 		let prev_funding_txid = self.funding.channel_transaction_parameters.funding_outpoint
 			.map(|outpoint| outpoint.txid);
@@ -9254,6 +9256,10 @@ impl<SP: Deref> FundedChannel<SP> where
 			// TODO (taproot|arik)
 			#[cfg(taproot)]
 			_ => todo!()
+		}
+		post_channel_transaction_parameters.funding_outpoint = None; // filled later
+		if let Some(ref mut counterparty_parameters) = post_channel_transaction_parameters.counterparty_parameters {
+			counterparty_parameters.pubkeys.funding_pubkey = counterparty_funding_pubkey;
 		}
 
 		// New reserve values are based on the new channel value, and v2-specific
@@ -9300,7 +9306,7 @@ impl<SP: Deref> FundedChannel<SP> where
 			false, // is_outbound
 		)?;
 
-		let funding_scope = self.funding_scope_for_splice(our_funding_satoshis, post_channel_value);
+		let funding_scope = self.funding_scope_for_splice(our_funding_satoshis, post_channel_value, false, msg.funding_pubkey);
 
 		let funding_negotiation_context = FundingNegotiationContext {
 			our_funding_satoshis,
@@ -9318,7 +9324,6 @@ impl<SP: Deref> FundedChannel<SP> where
 			interactive_tx_constructor: None,
 			interactive_tx_signing_session: None,
 		});
-		// TODO(splicing): Store msg.funding_pubkey
 
 		// Apply start of splice change in the state
 		self.splice_start(false, logger);
@@ -9382,7 +9387,7 @@ impl<SP: Deref> FundedChannel<SP> where
 			true, // is_outbound
 		)?;
 
-		let funding_scope = self.funding_scope_for_splice(our_funding_satoshis, post_channel_value);
+		let funding_scope = self.funding_scope_for_splice(our_funding_satoshis, post_channel_value, true, msg.funding_pubkey);
 
 		let pre_funding_transaction = &self.funding.funding_transaction;
 		let pre_funding_txo = &self.funding.get_funding_txo();
