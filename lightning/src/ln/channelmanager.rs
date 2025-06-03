@@ -10179,7 +10179,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 						});
 					}
 				} else {
-					return Err(MsgHandleErrInternal::send_err_msg_no_close("Channel is not funded, cannot splice".to_owned(), msg.channel_id));
+					return Err(MsgHandleErrInternal::send_err_msg_no_close(format!("Channel is not funded, cannot be spliced"), msg.channel_id));
 				}
 			},
 		};

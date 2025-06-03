@@ -28,6 +28,7 @@ fn test_v1_splice_in() {
 
 	let channel_value_sat = 100_000;
 	let channel_reserve_amnt_sat = 1_000;
+	let expect_inputs_in_reverse = true;
 
 	let (_, _, channel_id, _) = create_announced_chan_between_nodes_with_value(
 		&nodes,

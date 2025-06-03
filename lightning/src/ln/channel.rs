@@ -2799,6 +2799,7 @@ where
 		&self.context
 	}
 
+	#[inline]
 	fn context_mut(&mut self) -> &mut ChannelContext<SP> {
 		&mut self.context
 	}
