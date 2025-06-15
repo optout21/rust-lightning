@@ -29,6 +29,7 @@ fn test_v1_splice_in() {
 	let channel_value_sat = 100_000;
 	let channel_reserve_amnt_sat = 1_000;
 	let expect_inputs_in_reverse = true;
+	let expect_outputs_in_reverse = true;
 
 	let (_, _, channel_id, _) = create_announced_chan_between_nodes_with_value(
 		&nodes,
@@ -201,8 +202,13 @@ fn test_v1_splice_in() {
 		MessageSendEvent::SendTxAddOutput,
 		acceptor_node.node.get_our_node_id()
 	);
-	assert!(tx_add_output_msg.script.is_p2wsh());
-	assert_eq!(tx_add_output_msg.sats, post_splice_channel_value);
+	if !expect_outputs_in_reverse {
+		assert!(tx_add_output_msg.script.is_p2wsh());
+		assert_eq!(tx_add_output_msg.sats, post_splice_channel_value);
+	} else {
+		assert!(tx_add_output_msg.script.is_p2wpkh());
+		assert_eq!(tx_add_output_msg.sats, 14094); // extra_splice_input_sats - splice_in_sats
+	}
 
 	let _res = acceptor_node
 		.node
@@ -222,8 +228,13 @@ fn test_v1_splice_in() {
 		MessageSendEvent::SendTxAddOutput,
 		acceptor_node.node.get_our_node_id()
 	);
-	assert!(tx_add_output2_msg.script.is_p2wpkh());
-	assert_eq!(tx_add_output2_msg.sats, 14094); // extra_splice_input_sats - splice_in_sats
+	if !expect_outputs_in_reverse {
+		assert!(tx_add_output2_msg.script.is_p2wpkh());
+		assert_eq!(tx_add_output2_msg.sats, 14094); // extra_splice_input_sats - splice_in_sats
+	} else {
+		assert!(tx_add_output2_msg.script.is_p2wsh());
+		assert_eq!(tx_add_output2_msg.sats, post_splice_channel_value);
+	}
 
 	let _res = acceptor_node
 		.node

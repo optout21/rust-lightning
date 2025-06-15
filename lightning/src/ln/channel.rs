@@ -59,7 +59,7 @@ use crate::ln::channelmanager::{
 use crate::ln::interactivetxs::{
 	calculate_change_output_value, get_output_weight, AbortReason, HandleTxCompleteResult,
 	InteractiveTxConstructor, InteractiveTxConstructorArgs, InteractiveTxMessageSend,
-	InteractiveTxMessageSendResult, InteractiveTxSigningSession, OutputOwned, SharedOwnedOutput,
+	InteractiveTxMessageSendResult, InteractiveTxSigningSession,
 	TX_COMMON_FIELDS_WEIGHT,
 };
 use crate::ln::msgs;
@@ -2891,22 +2891,11 @@ where
 		// Note: For the error case when the inputs are insufficient, it will be handled after
 		// the `calculate_change_output_value` call below
 		let mut funding_outputs = Vec::new();
-		let mut expected_remote_shared_funding_output = None;
 
 		let shared_funding_output = TxOut {
 			value: Amount::from_sat(self.funding.get_value_satoshis()),
 			script_pubkey: self.funding.get_funding_redeemscript().to_p2wsh(),
 		};
-
-		if is_initiator {
-			funding_outputs.push(OutputOwned::Shared(SharedOwnedOutput::new(
-				shared_funding_output,
-				self.funding_negotiation_context.our_funding_satoshis,
-			)));
-		} else {
-			let TxOut { value, script_pubkey } = shared_funding_output;
-			expected_remote_shared_funding_output = Some((script_pubkey, value.to_sat()));
-		}
 
 		// Optionally add change output
 		let change_script = if let Some(script) = change_destination_opt {
@@ -2919,6 +2908,7 @@ where
 		let change_value_opt = calculate_change_output_value(
 			is_initiator,
 			self.funding_negotiation_context.our_funding_satoshis,
+			&shared_funding_output.script_pubkey,
 			&funding_inputs,
 			&funding_outputs,
 			self.funding_negotiation_context.funding_feerate_sat_per_1000_weight,
@@ -2936,7 +2926,7 @@ where
 			// Check dust limit again
 			if change_value_decreased_with_fee > self.context.holder_dust_limit_satoshis {
 				change_output.value = Amount::from_sat(change_value_decreased_with_fee);
-				funding_outputs.push(OutputOwned::Single(change_output));
+				funding_outputs.push(change_output);
 			}
 		}
 
@@ -2951,8 +2941,8 @@ where
 			is_initiator,
 			funding_tx_locktime: self.funding_negotiation_context.funding_tx_locktime,
 			inputs_to_contribute: funding_inputs,
+			shared_funding_output: (shared_funding_output, self.funding_negotiation_context.our_funding_satoshis),
 			outputs_to_contribute: funding_outputs,
-			expected_remote_shared_funding_output,
 		};
 		let mut tx_constructor = InteractiveTxConstructor::new(constructor_args)?;
 		let msg = tx_constructor.take_initiator_first_message();
@@ -12120,6 +12110,10 @@ where
 			funding_feerate_sat_per_1000_weight: msg.funding_feerate_sat_per_1000_weight,
 			our_funding_inputs: our_funding_inputs.clone(),
 		};
+		let shared_funding_output = TxOut {
+			value: Amount::from_sat(funding.get_value_satoshis()),
+			script_pubkey: funding.get_funding_redeemscript().to_p2wsh(),
+		};
 
 		let interactive_tx_constructor = Some(InteractiveTxConstructor::new(
 			InteractiveTxConstructorArgs {
@@ -12131,8 +12125,8 @@ where
 				funding_tx_locktime: funding_negotiation_context.funding_tx_locktime,
 				is_initiator: false,
 				inputs_to_contribute: our_funding_inputs,
+				shared_funding_output: (shared_funding_output, our_funding_satoshis),
 				outputs_to_contribute: Vec::new(),
-				expected_remote_shared_funding_output: Some((funding.get_funding_redeemscript().to_p2wsh(), funding.get_value_satoshis())),
 			}
 		).map_err(|_| ChannelError::Close((
 			"V2 channel rejected due to sender error".into(),
