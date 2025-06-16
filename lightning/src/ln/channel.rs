@@ -25,8 +25,6 @@ use bitcoin::secp256k1::constants::PUBLIC_KEY_SIZE;
 use bitcoin::secp256k1::{ecdsa::Signature, Secp256k1};
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use bitcoin::{secp256k1, sighash};
-#[cfg(splicing)]
-use bitcoin::{Sequence, Witness};
 
 use crate::chain::chaininterface::{
 	fee_for_weight, ConfirmationTarget, FeeEstimator, LowerBoundedFeeEstimator,
@@ -2862,7 +2860,7 @@ where
 	fn begin_interactive_funding_tx_construction<ES: Deref>(
 		&mut self, signer_provider: &SP, entropy_source: &ES, holder_node_id: PublicKey,
 		is_initiator: bool, change_destination_opt: Option<ScriptBuf>,
-		prev_funding_input: Option<(TxIn, TransactionU16LenLimited)>,
+		prev_funding_input: Option<(bitcoin::OutPoint, u64, u64)>,
 	) -> Result<Option<InteractiveTxMessageSend>, AbortReason>
 	where
 		ES::Target: EntropySource,
@@ -2881,10 +2879,10 @@ where
 		let mut funding_inputs = Vec::new();
 		mem::swap(&mut self.funding_negotiation_context.our_funding_inputs, &mut funding_inputs);
 
-		if is_initiator {
-			if let Some(prev_funding_input) = prev_funding_input {
-				funding_inputs.push(prev_funding_input);
-			}
+		// For splice-in, the shared input
+		let mut shared_funding_input = None;
+		if let Some((outpoint, value, local_owned)) = prev_funding_input {
+			shared_funding_input = Some((outpoint, value, local_owned));
 		}
 
 		// Add output for funding tx
@@ -2908,8 +2906,9 @@ where
 		let change_value_opt = calculate_change_output_value(
 			is_initiator,
 			self.funding_negotiation_context.our_funding_satoshis,
-			&shared_funding_output.script_pubkey,
 			&funding_inputs,
+			shared_funding_input.map(|(_, _, local)| local),
+			&shared_funding_output.script_pubkey,
 			&funding_outputs,
 			self.funding_negotiation_context.funding_feerate_sat_per_1000_weight,
 			change_script.minimal_non_dust().to_sat(),
@@ -2941,6 +2940,7 @@ where
 			is_initiator,
 			funding_tx_locktime: self.funding_negotiation_context.funding_tx_locktime,
 			inputs_to_contribute: funding_inputs,
+			shared_funding_input,
 			shared_funding_output: (shared_funding_output, self.funding_negotiation_context.our_funding_satoshis),
 			outputs_to_contribute: funding_outputs,
 		};
@@ -10201,6 +10201,12 @@ where
 			false, // is_outbound
 		)?;
 
+		let pre_funding_txo = if let Some(pre_funding_txo) = self.funding.get_funding_txo() {
+			pre_funding_txo
+		} else {
+			return Err(ChannelError::Warn(format!("Current funding TXO is unset on a funded channel")));
+		};
+
 		let funding_scope = FundingScope::for_splice(
 			&self.funding,
 			&self.context,
@@ -10244,7 +10250,10 @@ where
 			is_splice: true,
 		};
 
-		// Start interactive funding negotiation. TODO(splicing): Add current funding as extra input, once shared inputs are supported, see #3842.
+		let pre_balance_msat = self.funding.value_to_self_msat;
+
+		// Start interactive funding negotiation. No extra input, as we are not the splice initiator
+		let prev_funding_input = Some((pre_funding_txo.into_bitcoin_outpoint(), pre_channel_value, (pre_balance_msat as f64 / 1000.0).round() as u64));
 		let _msg = negotiating_view
 			.begin_interactive_funding_tx_construction(
 				signer_provider,
@@ -10252,7 +10261,7 @@ where
 				holder_node_id.clone(),
 				false,
 				None,
-				None,
+				prev_funding_input,
 			)
 			.map_err(|err| {
 				ChannelError::Warn(format!(
@@ -10317,8 +10326,9 @@ where
 			our_funding_contribution,
 			their_funding_contribution_satoshis,
 		);
+		let pre_balance_msat = self.funding.value_to_self_msat;
 		let _post_balance =
-			PendingSplice::add_checked(self.funding.value_to_self_msat, our_funding_contribution);
+			PendingSplice::add_checked(pre_balance_msat, our_funding_contribution);
 
 		// TODO(splicing): Pre-check for reserve requirement
 		// (Note: It should also be checked later at tx_complete)
@@ -10338,11 +10348,15 @@ where
 			msg.funding_pubkey,
 		)?;
 
-		let pre_funding_transaction = &self.funding.funding_transaction;
-		let pre_funding_txo = &self.funding.get_funding_txo();
+		// let pre_funding_transaction = &self.funding.funding_transaction;
+		let pre_funding_txo = if let Some(pre_funding_txo) = self.funding.get_funding_txo() {
+			pre_funding_txo
+		} else {
+			return Err(ChannelError::Warn(format!("Current funding TXO is unset on a funded channel")));
+		};
 		// We need the current funding tx as an extra input
-		let prev_funding_input =
-			Self::get_input_of_previous_funding(pre_funding_transaction, pre_funding_txo)?;
+		// let prev_funding_input =
+			// Self::get_input_of_previous_funding(pre_funding_transaction, pre_funding_txo)?;
 		debug_assert!(pending_splice.funding_scope.is_none());
 		pending_splice.funding_scope = Some(funding_scope);
 		// update funding values
@@ -10367,6 +10381,7 @@ where
 		};
 
 		// Start interactive funding negotiation, with the previous funding transaction as an extra shared input
+		let prev_funding_input = Some((pre_funding_txo.into_bitcoin_outpoint(), pre_channel_value, (pre_balance_msat as f64 / 1000.0).round() as u64));
 		let tx_msg_opt = negotiating_view
 			.begin_interactive_funding_tx_construction(
 				signer_provider,
@@ -10374,40 +10389,12 @@ where
 				holder_node_id.clone(),
 				true,
 				None,
-				Some(prev_funding_input),
+				prev_funding_input,
 			)
 			.map_err(|err| {
 				ChannelError::Warn(format!("V2 channel rejected due to sender error, {:?}", err))
 			})?;
 		Ok(tx_msg_opt)
-	}
-
-	/// Get a transaction input that is the previous funding transaction
-	#[cfg(splicing)]
-	fn get_input_of_previous_funding(
-		pre_funding_transaction: &Option<Transaction>, pre_funding_txo: &Option<OutPoint>,
-	) -> Result<(TxIn, TransactionU16LenLimited), ChannelError> {
-		if let Some(pre_funding_transaction) = pre_funding_transaction {
-			if let Some(pre_funding_txo) = pre_funding_txo {
-				Ok((
-					TxIn {
-						previous_output: pre_funding_txo.into_bitcoin_outpoint(),
-						script_sig: ScriptBuf::new(),
-						sequence: Sequence::ZERO,
-						witness: Witness::new(),
-					},
-					TransactionU16LenLimited::new(pre_funding_transaction.clone()).unwrap(), // TODO err?
-				))
-			} else {
-				Err(ChannelError::Warn(
-					"Internal error: Missing previous funding transaction outpoint".to_string(),
-				))
-			}
-		} else {
-			Err(ChannelError::Warn(
-				"Internal error: Missing previous funding transaction".to_string(),
-			))
-		}
 	}
 
 	#[cfg(splicing)]
@@ -12125,6 +12112,7 @@ where
 				funding_tx_locktime: funding_negotiation_context.funding_tx_locktime,
 				is_initiator: false,
 				inputs_to_contribute: our_funding_inputs,
+				shared_funding_input: None,
 				shared_funding_output: (shared_funding_output, our_funding_satoshis),
 				outputs_to_contribute: Vec::new(),
 			}

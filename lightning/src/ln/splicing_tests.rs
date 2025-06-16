@@ -28,7 +28,6 @@ fn test_v1_splice_in() {
 
 	let channel_value_sat = 100_000;
 	let channel_reserve_amnt_sat = 1_000;
-	let expect_inputs_in_reverse = true;
 	let expect_outputs_in_reverse = true;
 
 	let (_, _, channel_id, _) = create_announced_chan_between_nodes_with_value(
@@ -143,7 +142,7 @@ fn test_v1_splice_in() {
 		MessageSendEvent::SendTxAddInput,
 		acceptor_node.node.get_our_node_id()
 	);
-	let value = tx_add_input_msg.prevtx.as_transaction().output
+	let value = tx_add_input_msg.prevtx.as_ref().unwrap().as_transaction().output
 		[tx_add_input_msg.prevtx_out as usize]
 		.value
 		.to_sat();
@@ -169,19 +168,15 @@ fn test_v1_splice_in() {
 		.node
 		.handle_tx_complete(acceptor_node.node.get_our_node_id(), &tx_complete_msg);
 	// Second input
-	let exp_value =
+	let _exp_value =
 		if inputs_seen_in_reverse { channel_value_sat } else { extra_splice_funding_input_sats };
 	let tx_add_input2_msg = get_event_msg!(
 		&initiator_node,
 		MessageSendEvent::SendTxAddInput,
 		acceptor_node.node.get_our_node_id()
 	);
-	assert_eq!(
-		tx_add_input2_msg.prevtx.as_transaction().output[tx_add_input2_msg.prevtx_out as usize]
-			.value
-			.to_sat(),
-		exp_value
-	);
+	assert_eq!(tx_add_input2_msg.prevtx, None);
+	assert_eq!(tx_add_input2_msg.shared_input_txid.unwrap().to_string(), "4f128bedf1a15baf465ab1bfd6e97c8f82628f4156bf86eb1cbc132cda6733ae");
 
 	let _res = acceptor_node
 		.node
