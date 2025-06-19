@@ -641,7 +641,7 @@ impl NegotiationContext {
 					return Err(AbortReason::DuplicateFundingInput);
 				}
 				// Check if receied shared input matches the expected
-				if shared_funding_input.0.txid != *shared_txid {
+				if !(shared_funding_input.0.txid == *shared_txid && shared_funding_input.0.vout == msg.prevtx_out) {
 					return Err(AbortReason::UnexpectedFundingInput);
 				} else {
 					let previous_output = OutPoint { txid: *shared_txid, vout: msg.prevtx_out };
