@@ -94,8 +94,9 @@ fn do_test_v2_channel_establishment(session: V2ChannelEstablishmentTestSession) 
 		sequence: initiator_funding_inputs[0].0.sequence.0,
 		shared_input_txid: None,
 	};
-	let input_value =
-		tx_add_input_msg.prevtx.as_ref().unwrap().as_transaction().output[tx_add_input_msg.prevtx_out as usize].value;
+	let input_value = tx_add_input_msg.prevtx.as_ref().unwrap().as_transaction().output
+		[tx_add_input_msg.prevtx_out as usize]
+		.value;
 	assert_eq!(input_value.to_sat(), session.initiator_input_value_satoshis);
 
 	nodes[1].node.handle_tx_add_input(nodes[0].node.get_our_node_id(), &tx_add_input_msg);

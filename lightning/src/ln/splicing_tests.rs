@@ -142,17 +142,15 @@ fn test_v1_splice_in() {
 		MessageSendEvent::SendTxAddInput,
 		acceptor_node.node.get_our_node_id()
 	);
-	let value = tx_add_input_msg.prevtx.as_ref().unwrap().as_transaction().output
-		[tx_add_input_msg.prevtx_out as usize]
-		.value
-		.to_sat();
 	// check which input is this
-	let inputs_seen_in_reverse = if value == extra_splice_funding_input_sats {
-		true
-	} else if value == channel_value_sat {
-		false
+	let inputs_seen_in_reverse = if let Some(prevtx) = tx_add_input_msg.prevtx.as_ref() {
+		if prevtx.as_transaction().output[tx_add_input_msg.prevtx_out as usize].value.to_sat() == extra_splice_funding_input_sats {
+			true
+		} else {
+			false
+		}
 	} else {
-		panic!("Unexpected input with value {}", value);
+		false
 	};
 
 	let _res = acceptor_node
